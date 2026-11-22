@@ -1,0 +1,12 @@
+{
+  "serverScheme": "http",
+  "serverHost": "192.0.2.10",
+  "serverPort": 8765,
+  "startBackend": false,
+  "backendBindHost": "127.0.0.1",
+  "backendPort": 8765,
+  "allowStopBackend": false,
+  "requestTimeoutSeconds": 3,
+  "notificationPollMs": 3000,
+  "apiTokenEnv": "KSC_API_TOKEN"
+}

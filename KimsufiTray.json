@@ -7,5 +7,6 @@
   "backendPort": 8765,
   "allowStopBackend": true,
   "requestTimeoutSeconds": 3,
-  "notificationPollMs": 3000
+  "notificationPollMs": 3000,
+  "apiTokenEnv": "KSC_API_TOKEN"
 }

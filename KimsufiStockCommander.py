@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Kimsufi Stock Commander v0.19
+Kimsufi Stock Commander v0.20
 Windows-first local web dashboard for TheoBrigitte/kimsufi-notifier.
 
 Design goals:
@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import hmac
 import json
 import io
 import math
@@ -44,7 +45,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
 import uuid
 
-APP_VERSION = "0.19.0"
+APP_VERSION = "0.20.3"
 CATALOG_OPTION_CACHE_SCHEMA = 2
 DEFAULT_PORT = 8765
 KNOWN_DCS = ["bhs", "fra", "gra", "hil", "lon", "par", "rbx", "sbg", "sgp", "syd", "vin", "waw", "ynm", "yyz"]
@@ -1995,8 +1996,8 @@ class Commander:
             "--country", str(self.settings["country"]),
         ]
         r = self.run_cli(args)
-        if r.code == 0:
-            mem = resolve_full_option(r.output, "memory", memory, plan) if memory else ""            sto = resolve_full_option(r.output, "storage", storage, plan) if storage else ""
+        if r.code == 0:            mem = resolve_full_option(r.output, "memory", memory, plan) if memory else ""
+            sto = resolve_full_option(r.output, "storage", storage, plan) if storage else ""
             with self.state_lock:
                 if memory and mem:
                     t["orderMemoryOption"] = mem
@@ -2994,8 +2995,8 @@ class Commander:
             if row.get("status") == "available":
                 state = "available"
                 for dc in row.get("datacenters", []):
-                    if dc not in available_dcs:
-                        available_dcs.append(dc)
+                    if dc not in available_dcs:                        available_dcs.append(dc)
+
         chosen_dc, reason = self.choose_datacenter(available_dcs)
         with self.state_lock:
             tt = self.targets.get(target_id)
@@ -3993,8 +3994,8 @@ def choose_replay_interval(
             "targetCaptureRatePercent": None,
         }
     best = max(float(r.get("nominalCaptureRatePercent", 0) or 0) for r in allowed)
-    threshold = best * max(0.0, min(1.0, float(retain_percent) / 100.0))
-    candidates = [r for r in allowed if float(r.get("nominalCaptureRatePercent", 0) or 0) + 1e-9 >= threshold]    chosen = max(candidates, key=lambda r: int(r.get("intervalSeconds", 0))) if candidates else max(allowed, key=lambda r: float(r.get("nominalCaptureRatePercent", 0) or 0))
+    threshold = best * max(0.0, min(1.0, float(retain_percent) / 100.0))    candidates = [r for r in allowed if float(r.get("nominalCaptureRatePercent", 0) or 0) + 1e-9 >= threshold]
+    chosen = max(candidates, key=lambda r: int(r.get("intervalSeconds", 0))) if candidates else max(allowed, key=lambda r: float(r.get("nominalCaptureRatePercent", 0) or 0))
     return {
         "intervalSeconds": int(chosen.get("intervalSeconds")),
         "nominalCaptureRatePercent": float(chosen.get("nominalCaptureRatePercent", 0) or 0),
@@ -4805,17 +4806,53 @@ def format_command(args: list[str]) -> str:
 
 class Handler(BaseHTTPRequestHandler):
     commander: Commander
-    server_version = "KimsufiStockCommander/0.1"
+    server_version = "KimsufiStockCommander/0.20"
+    auth_enabled: bool = False
+    auth_token: str = ""
+    auth_token_env: str = "KSC_API_TOKEN"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Quiet default access log; operational logs are written separately.
         return
+
+    def _presented_bearer_token(self) -> str:
+        raw = str(self.headers.get("Authorization") or "")
+        m = re.match(r"^\s*Bearer\s+(.+?)\s*$", raw, flags=re.IGNORECASE)
+        return m.group(1) if m else ""
+
+    def _is_authenticated(self) -> bool:
+        if not self.auth_enabled:
+            return True
+        presented = self._presented_bearer_token()
+        expected = str(self.auth_token or "")
+        if not presented or not expected:
+            return False
+        return hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+
+    def _send_unauthorized(self) -> None:
+        data = json.dumps({"error": "authentication required", "authRequired": True}, ensure_ascii=False).encode("utf-8")
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("WWW-Authenticate", 'Bearer realm="KimsufiStockCommander"')
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _require_auth(self) -> bool:
+        if self._is_authenticated():
+            return True
+        self._send_unauthorized()
+        return False
 
     def _send_json(self, obj: Any, status: int = 200) -> None:
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -4825,6 +4862,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         if filename:
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(data)))
@@ -4858,17 +4897,50 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", mime)
         self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
     def do_GET(self) -> None:
         p = urlparse(self.path)
+        if p.path == "/api/health":
+            authenticated = self._is_authenticated()
+            if self.auth_enabled and not authenticated:
+                # Public liveness endpoint intentionally exposes no operational
+                # state beyond version + whether authentication is required.
+                self._send_json({
+                    "ok": True,
+                    "version": APP_VERSION,
+                    "authRequired": True,
+                    "authenticated": False,
+                })
+            else:
+                health = dict(self.commander.health_status())
+                health.update({
+                    "authRequired": bool(self.auth_enabled),
+                    "authenticated": bool(authenticated),
+                })
+                self._send_json(health)
+            return
+
+        if p.path == "/api/auth/check":
+            if not self._require_auth():
+                return
+            self._send_json({
+                "ok": True,
+                "version": APP_VERSION,
+                "authRequired": bool(self.auth_enabled),
+                "authenticated": True,
+            })
+            return
+
+        if p.path.startswith("/api/") and not self._require_auth():
+            return
+
         if p.path == "/api/state":
             self._send_json(self.commander.snapshot())
-            return
-        if p.path == "/api/health":
-            self._send_json(self.commander.health_status())
             return
         if p.path == "/api/notifications":
             self._send_json({"notifications": list(reversed(self.commander.notification_history[-50:]))})
@@ -4894,10 +4966,14 @@ class Handler(BaseHTTPRequestHandler):
         if p.path.startswith("/api/"):
             self._send_json({"error": "not found"}, 404)
             return
+        # Static UI assets remain readable without authentication. They contain
+        # no API token or account data; the UI itself prompts before /api/* use.
         self._serve_file(p.path)
 
     def do_POST(self) -> None:
         p = urlparse(self.path)
+        if p.path.startswith("/api/") and not self._require_auth():
+            return
         try:
             payload = self._read_json()
             if p.path == "/api/settings":
@@ -4917,8 +4993,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(self.commander.portfolio_replay(payload))
             elif p.path == "/api/optimizer":
                 self._send_json(self.commander.optimize_strategies(payload))
-            elif p.path == "/api/target":
-                self._send_json({"target": self.commander.upsert_target(payload)})
+            elif p.path == "/api/target":                self._send_json({"target": self.commander.upsert_target(payload)})
             elif p.path == "/api/target/remove":
                 self.commander.remove_target(str(payload.get("id", "")))
                 self._send_json({"ok": True})
@@ -4966,9 +5041,28 @@ def _global_instance_lock_path() -> Path:
         return Path(base) / "KimsufiStockCommander" / "global-instance.lock"
     return Path.home() / ".kimsufi-stock-commander" / "global-instance.lock"
 
+def _server_security_config(root: Path) -> dict[str, Any]:
+    raw = load_json(root / "KimsufiServer.json", {})
+    return {
+        "authEnabled": bool(raw.get("authEnabled", False)),
+        "authTokenEnv": str(raw.get("authTokenEnv", "KSC_API_TOKEN") or "KSC_API_TOKEN").strip(),
+    }
+
+
 def main() -> int:
     args = build_arg_parser().parse_args()
     root = Path(__file__).resolve().parent
+    security = _server_security_config(root)
+    auth_enabled = bool(security.get("authEnabled"))
+    auth_token_env = str(security.get("authTokenEnv") or "KSC_API_TOKEN")
+    auth_token = str(os.environ.get(auth_token_env, "") or "")
+    if auth_enabled and len(auth_token) < 24:
+        print(
+            f"API authentication is enabled but environment variable {auth_token_env!r} "
+            "is missing or too short (minimum 24 characters). Refusing to start.",
+            file=sys.stderr,
+        )
+        return 3
 
     # Hold both a folder-local lock and a per-user global lock for the full
     # process lifetime.  The global lock prevents two v0.18+ copies extracted in
@@ -4987,18 +5081,23 @@ def main() -> int:
                 instance_lock.__exit__(None, None, None)
             except Exception:
                 pass
-        print("Another Kimsufi Stock Commander v0.19+ instance is already running for this user.", file=sys.stderr)
+        print("Another Kimsufi Stock Commander v0.18+ instance is already running for this user.", file=sys.stderr)
         return 2
 
     commander = Commander(root, demo=args.demo)
     Handler.commander = commander
+    Handler.auth_enabled = auth_enabled
+    Handler.auth_token = auth_token if auth_enabled else ""
+    Handler.auth_token_env = auth_token_env
     commander.start_worker()
+
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.daemon_threads = True
     url = f"http://{args.host}:{args.port}/"
     print(f"Kimsufi Stock Commander v{APP_VERSION}")
     print(f"Dashboard: {url}")
     print(f"Mode: {'DEMO (checkout blocked)' if args.demo else 'LIVE backend (auto-order remains disarmed until enabled in UI)'}")
+    print(f"API auth: {'ENABLED (' + auth_token_env + ')' if auth_enabled else 'disabled'}")
     if args.open_browser:
         threading.Timer(0.7, lambda: webbrowser.open(url)).start()
     try:

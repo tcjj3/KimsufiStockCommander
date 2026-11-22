@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.20.3
+
+Authentication and remote-management release.
+
+Highlights:
+
+- optional Web/API Bearer Token authentication;
+- fail-closed startup when authentication is enabled but the configured token is unavailable/invalid;
+- browser authentication with sessionStorage/localStorage modes;
+- authenticated remote Tray requests via environment-provided token;
+- secure remote examples and token generation helper;
+- browser auth UX cleanup across v0.20.1–v0.20.3:
+  - closable management dialog after successful authentication;
+  - distinct unauthenticated/stale-token/authenticated states;
+  - password-masked token input with show/hide control;
+  - Enter-to-submit and disabled empty-token submit;
+  - improved layout and remember-token control;
+  - dynamic HTTP plaintext-token warning that automatically hides under HTTPS.
+
+The public release keeps environment-neutral paths/addresses and keeps the legacy watcher auto-order switch disabled by default.
+
 ## v0.19.0
 
 First public source release.

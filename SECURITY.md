@@ -36,3 +36,11 @@ Ambiguous checkout results intentionally enter REVIEW rather than retrying autom
 ## Reporting a vulnerability
 
 Please open a GitHub issue for non-sensitive defects. For vulnerabilities involving credentials or a practical unintended-purchase path, avoid posting live secrets, order IDs or API credentials in public issue content.
+
+## Web/API authentication (v0.20+)
+
+When remote access is required, enable Bearer Token authentication in `KimsufiServer.json` and provide the token via the configured environment variable (default `KSC_API_TOKEN`). Do not store the token in source-controlled JSON.
+
+Authentication does not encrypt HTTP traffic. If the browser/Tray reaches Commander over HTTP, the Bearer Token is visible to an on-path observer. Use HTTPS or a trusted encrypted tunnel/VPN across untrusted networks. The browser UI warns on non-loopback HTTP and hides that warning automatically under HTTPS.
+
+If `authEnabled=true` but the token is missing or too short, Commander intentionally refuses to start.

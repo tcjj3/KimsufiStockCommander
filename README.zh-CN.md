@@ -1,8 +1,8 @@
 # Kimsufi Stock Commander
 
-Kimsufi Stock Commander 是一个面向 Windows 的 Kimsufi 可视化库存监控与保守自动下单控制台，支持精确配置、机房策略、付款周期/价格模式、预算闸门、通知、库存历史、回放与策略优化。
+Kimsufi Stock Commander 是一个面向 Windows 的 Kimsufi 可视化库存监控与保守自动下单控制台，支持精确配置、机房策略、付款周期/价格模式、预算闸门、通知、库存历史、回放、策略优化，以及可选的 Web/API Bearer Token 鉴权。
 
-> **当前公开版本：v0.19.0**  
+> **当前公开版本：v0.20.3**  
 > **许可证：MIT**  
 > 本项目为独立社区工具，与 OVHcloud/Kimsufi 无隶属或官方支持关系。
 
@@ -18,13 +18,13 @@ Kimsufi Stock Commander 是一个面向 Windows 的 Kimsufi 可视化库存监�
 4. 首次 live 目标建议 `desiredQty = 1`；
 5. 最后才打开“自动下单总开关”。
 
-v0.19 **没有 Web/API 鉴权**。默认只监听 `127.0.0.1`。如果绑定 `0.0.0.0` 供 VM/局域网使用，请只在可信网络中使用，并通过 Windows Firewall 限制可访问 8765 的管理机 IP；不要直接暴露到公网。
+项目采用保守失败（fail-closed）思路，但最终仍应由使用者确认目标配置、数量、机房策略、付款组合与预算。
 
 ## 主要能力
 
 - 动态读取 Kimsufi 目录；
 - 按精确 RAM/storage 配置监控库存；
-- RAM、NVMe/SATA SSD/HDD、库存状态和价格区间筛选；
+- RAM、NVMe/SATA SSD/HDD、库存、可下单性和价格区间筛选；
 - 任意/固定/白名单/优先级+回退/排除等机房策略；
 - 动态发现 `price-duration / price-mode`；
 - 按 OVH public cart 原始价格结构计算配置级月价与付款周期估算；
@@ -38,10 +38,8 @@ v0.19 **没有 Web/API 鉴权**。默认只监听 `127.0.0.1`。如果绑定 `0.
   - AutoPay 默认要求有限总预算；
 - Windows Tray、登录自启、桌面/Telegram 通知；
 - Tray 与 Commander 后端解耦，可独立配置连接 Host/Port、是否启动/停止后端；
-- 库存窗口历史、Watch Index、置信度；
-- 轮询/DC 策略历史回放；
-- 多目标 priority/budget 回放；
-- Pareto 自动策略优化器；
+- 库存历史、Watch Index、历史回放和 Pareto 策略优化；
+- **v0.20+ 支持可选 Web/API Bearer Token 鉴权**；
 - Python 后端只使用标准库，无 pip 依赖。
 
 ## 运行要求
@@ -92,7 +90,7 @@ http://127.0.0.1:8765/
 
 首次启动时自动下单总开关为关闭状态。
 
-## 凭证
+## OVH 凭证
 
 示例仅说明变量名：
 
@@ -104,6 +102,77 @@ py -3 .\KimsufiStockCommander.py --open-browser
 ```
 
 不要把真实凭证写进源码或 JSON。
+
+## Web/API 鉴权（v0.20+）
+
+本机模式下鉴权默认关闭。
+
+远程浏览器/Tray 使用时，先生成强随机 Token：
+
+```powershell
+.\generate-api-token.ps1 -SetUserEnvironment
+```
+
+然后在 `KimsufiServer.json` 开启鉴权：
+
+```json
+{
+  "bindHost": "0.0.0.0",
+  "port": 8765,
+  "openBrowser": true,
+  "authEnabled": true,
+  "authTokenEnv": "KSC_API_TOKEN"
+}
+```
+
+设置环境变量后需要重启 Commander。
+
+如果 `authEnabled=true`，但指定环境变量不存在或 Token 太短，Commander 会直接拒绝启动，不会静默退回无鉴权模式。
+
+### 浏览器认证
+
+浏览器在服务器要求鉴权时会弹出 Bearer Token 输入框：
+
+- 默认只保存在当前会话；
+- 勾选“在此浏览器记住 Token”后才写入 `localStorage`；
+- 已认证状态可更换 Token，或注销并清除本地 Token；
+- 弹窗区分“本地无 Token / 已保存 Token 失效 / 已认证”三种状态；
+- Token 输入框默认密码掩码，可手动显示/隐藏；
+- HTTP 明文警告为动态判断，页面通过 HTTPS 打开时会自动隐藏。
+
+### Tray 认证
+
+Tray 从环境变量读取同一 Token：
+
+```json
+{
+  "apiTokenEnv": "KSC_API_TOKEN"
+}
+```
+
+远程 Tray 通常配置为：
+
+```json
+{
+  "serverScheme": "http",
+  "serverHost": "192.0.2.10",
+  "serverPort": 8765,
+  "startBackend": false,
+  "allowStopBackend": false,
+  "apiTokenEnv": "KSC_API_TOKEN"
+}
+```
+
+可参考：
+
+- `KimsufiTray.remote-auth-example.json`
+- `KimsufiServer.secure-remote-example.json`
+
+### HTTP / HTTPS 边界
+
+Bearer Token 解决的是“谁能调用 API”，但 HTTP 本身不加密 Token。
+
+可信 LAN/VM 场景建议配合 Windows Firewall 限制 Commander 端口；跨不可信网络则使用 HTTPS、WireGuard、Tailscale 等可信加密通道。当前页面如果是通过 HTTPS 打开，会自动隐藏 HTTP 明文 Token 警告。
 
 ## 自动下单安全模型
 
@@ -127,11 +196,13 @@ quantity=1 checkout
 
 无人值守 AutoPay 默认要求启用有限总预算；预算未启用或总预算无限时会保守阻止自动付款。
 
+任何不明确 checkout 结果都会进入 REVIEW，并解除全局自动下单武装，直到使用者核对服务商侧订单/付款状态。
+
 ## Availability ≠ Orderability
 
-实际测试发现，availability 数据可能出现当前 cart/order options 根本无法构造的配置。
+availability 数据可能出现当前 cart/order options 无法构造的配置。
 
-v0.19 将其分为：
+Commander 将其分为：
 
 - **可下单**：当前 cart 可构造；
 - **Availability-only**：库存遥测存在，但当前无法下单；
@@ -165,26 +236,12 @@ Tray 由 `KimsufiTray.json` 独立配置。
   "startBackend": true,
   "backendBindHost": "127.0.0.1",
   "backendPort": 8765,
-  "allowStopBackend": true
+  "allowStopBackend": true,
+  "apiTokenEnv": "KSC_API_TOKEN"
 }
 ```
 
-远程模式参考 `KimsufiTray.remote-example.json`，通常设置：
-
-```json
-{
-  "serverHost": "192.0.2.10",
-  "serverPort": 8765,
-  "startBackend": false,
-  "allowStopBackend": false
-}
-```
-
-`192.0.2.10` 只是文档示例地址，请替换成自己的可信宿主机地址。
-
-### v0.19 远程安全边界
-
-v0.19 没有 Web/API 登录鉴权。Commander 如果监听 `0.0.0.0`，必须使用 Windows Firewall 把端口限制给指定 VM/管理机。不要将 v0.19 直接暴露在不可信网络或公网。
+远程模式示例使用文档地址 `192.0.2.10`，请替换成自己的可信宿主机地址。
 
 ## 通知
 
@@ -197,23 +254,7 @@ Telegram Token 默认从 `KSC_TELEGRAM_BOT_TOKEN` 环境变量读取，不写入
 
 ## data 目录
 
-运行态数据写入 `data/`，仓库已默认忽略：
-
-```text
-data/
-  settings.json
-  targets.json
-  catalog-cache.json
-  stock-history.jsonl
-  events.csv
-  orders.log
-  errors.log
-  budget-ledger.json
-  locks/
-  receipts/
-```
-
-不要把已有运行态 `data/` 提交到公开仓库。
+运行态数据写入 `data/`，仓库已默认忽略。不要把已有运行态 `data/` 提交到公开仓库。
 
 ## 测试
 
@@ -228,6 +269,8 @@ Get-ChildItem .\tests\test_*.py | ForEach-Object { py -3 $_.FullName }
 ```powershell
 node --check .\ui\app.js
 ```
+
+测试覆盖价格映射、可下单性、订单安全、snapshot 并发、UI pending、回放/优化、Tray/后端解耦、API 鉴权、浏览器鉴权和 Tray 鉴权。
 
 ## Legacy watcher
 

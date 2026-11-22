@@ -14,6 +14,7 @@
       <p>目录筛选 · 精确配置库存监控 · 机房策略 · 保守自动下单</p>
     </div>
     <div class="top-actions">
+      <button id="authStatusBtn" class="secondary auth-status">🔐 API 鉴权检测中…</button>
       <button id="refreshCatalog">刷新目录</button>
       <button id="pollNow">立即轮询</button>
       <label class="arm-switch">
@@ -474,6 +475,34 @@
       </div>
       <div id="priceProfileDetail" class="strategy-summary"></div>
       <pre id="reviewText" class="review-text"></pre>
+    </form>
+  </dialog>
+
+  <dialog id="authDialog" class="dialog auth-dialog">
+    <form method="dialog" class="dialog-card auth-card" id="authForm">
+      <div class="dialog-head auth-dialog-head"><h3>🔐 Commander API 认证</h3><button id="authClose" type="button" class="dialog-close" aria-label="关闭认证窗口" title="关闭">×</button></div>
+      <p class="hint" id="authHint">此 Commander 要求 Bearer Token。Token 只用于调用当前页面同源 API。</p>
+      <div class="auth-field">
+        <label for="apiTokenInput" class="auth-field-label">API Token</label>
+        <div class="auth-token-row">
+          <input id="apiTokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 KSC_API_TOKEN">
+          <button id="authTokenToggle" type="button" class="secondary auth-token-toggle" aria-label="显示 Token" title="显示 Token">👁</button>
+        </div>
+      </div>
+      <label class="auth-remember" for="rememberApiToken">
+        <input id="rememberApiToken" type="checkbox">
+        <span class="auth-remember-copy">
+          <strong>在此浏览器记住 Token</strong>
+          <small>保存到 localStorage；仅建议用于你自己的受信任设备</small>
+        </span>
+      </label>
+      <div id="authMessage" class="auth-message" aria-live="polite"></div>
+      <div class="dialog-actions auth-actions">
+        <button id="authConnect" type="button" class="primary" disabled>连接</button>
+        <button id="authCancel" type="button" class="secondary">关闭</button>
+        <button id="authForget" type="button" class="secondary auth-forget">注销并清除本地 Token</button>
+      </div>
+      <p class="hint auth-http-warning" id="authHttpWarning"></p>
     </form>
   </dialog>
 

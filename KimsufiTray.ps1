@@ -20,6 +20,7 @@ $cfg = [ordered]@{
     allowStopBackend = $true
     requestTimeoutSeconds = 3
     notificationPollMs = 3000
+    apiTokenEnv = "KSC_API_TOKEN"
 }
 if (Test-Path -LiteralPath $ConfigPath) {
     try {
@@ -44,12 +45,60 @@ $Backend = Join-Path $Root "KimsufiStockCommander.py"
 $script:StartedBackend = $null
 $script:SeenIds = New-Object 'System.Collections.Generic.HashSet[string]'
 $script:Connected = $false
+$script:ConnectionDetail = "连接中…"
+
+function Get-ApiToken {
+    $name = [string]$cfg.apiTokenEnv
+    if ([string]::IsNullOrWhiteSpace($name)) { return "" }
+    $value = [Environment]::GetEnvironmentVariable($name, "Process")
+    if ($null -eq $value) { return "" }
+    return [string]$value
+}
+
+function Get-AuthHeaders {
+    $token = Get-ApiToken
+    if ([string]::IsNullOrWhiteSpace($token)) { return @{} }
+    return @{ Authorization = "Bearer $token" }
+}
+
+function Invoke-CommanderGet([string]$Path) {
+    return Invoke-RestMethod -Uri "$BaseUrl$Path" -Headers (Get-AuthHeaders) -TimeoutSec ([int]$cfg.requestTimeoutSeconds)
+}
 
 function Test-Commander {
     try {
-        $r = Invoke-RestMethod -Uri "$BaseUrl/api/health" -TimeoutSec ([int]$cfg.requestTimeoutSeconds)
-        return [bool]$r.ok
-    } catch { return $false }
+        $health = Invoke-RestMethod -Uri "$BaseUrl/api/health" -TimeoutSec ([int]$cfg.requestTimeoutSeconds)
+        if (-not [bool]$health.ok) {
+            $script:ConnectionDetail = "健康检查失败"
+            return $false
+        }
+        $authProp = $health.PSObject.Properties['authRequired']
+        $authRequired = ($null -ne $authProp -and $authProp.Value -eq $true)
+        if ($authRequired) {
+            $token = Get-ApiToken
+            if ([string]::IsNullOrWhiteSpace($token)) {
+                $script:ConnectionDetail = "未认证：环境变量 $([string]$cfg.apiTokenEnv) 未设置"
+                return $false
+            }
+            try {
+                $check = Invoke-CommanderGet '/api/auth/check'
+                if (-not [bool]$check.authenticated) {
+                    $script:ConnectionDetail = "未认证：Token 被拒绝"
+                    return $false
+                }
+            } catch {
+                $script:ConnectionDetail = "未认证：Token 无效或已变更"
+                return $false
+            }
+            $script:ConnectionDetail = "已连接 · 已认证"
+            return $true
+        }
+        $script:ConnectionDetail = "已连接 · API 未启用鉴权"
+        return $true
+    } catch {
+        $script:ConnectionDetail = "未连接（自动重试）"
+        return $false
+    }
 }
 
 function Start-CommanderBackend {
@@ -72,7 +121,7 @@ function Start-CommanderBackend {
 
 function Invoke-CommanderPost([string]$Path) {
     try {
-        Invoke-RestMethod -Method Post -Uri "$BaseUrl$Path" -ContentType 'application/json' -Body '{}' -TimeoutSec ([int]$cfg.requestTimeoutSeconds) | Out-Null
+        Invoke-RestMethod -Method Post -Uri "$BaseUrl$Path" -Headers (Get-AuthHeaders) -ContentType 'application/json' -Body '{}' -TimeoutSec ([int]$cfg.requestTimeoutSeconds) | Out-Null
     } catch {}
 }
 
@@ -109,9 +158,9 @@ $pollItem.add_Click({ Invoke-CommanderPost '/api/poll' })
 $catalogItem.add_Click({ Invoke-CommanderPost '/api/catalog/refresh' })
 
 function Update-ConnectionState([bool]$Connected) {
-    if ($script:Connected -eq $Connected) { return }
+    $changed = ($script:Connected -ne $Connected)
     $script:Connected = $Connected
-    $statusItem.Text = if ($Connected) { "状态：已连接" } else { "状态：未连接（自动重试）" }
+    $statusItem.Text = "状态：$script:ConnectionDetail"
     $pollItem.Enabled = $Connected
     $catalogItem.Enabled = $Connected
     $notify.Text = if ($Connected) { "Kimsufi Stock Commander · connected" } else { "Kimsufi Stock Commander · disconnected" }
@@ -121,7 +170,7 @@ $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = [Math]::Max(1000,[int]$cfg.notificationPollMs)
 $timer.add_Tick({
     try {
-        $state = Invoke-RestMethod -Uri "$BaseUrl/api/state" -TimeoutSec ([int]$cfg.requestTimeoutSeconds)
+        $state = Invoke-CommanderGet '/api/state'
         Update-ConnectionState $true
         $desktop = $true
         if ($null -ne $state.settings.notifications.desktop) { $desktop = [bool]$state.settings.notifications.desktop }
@@ -134,15 +183,19 @@ $timer.add_Tick({
                 $notify.ShowBalloonTip(8000,[string]$x.title,[string]$x.message,$icon)
             }
         }
-    } catch { Update-ConnectionState $false }
+    } catch { [void](Test-Commander); Update-ConnectionState $false }
 })
 
 # Prime history if reachable; otherwise remain resident and reconnect later.
-try {
-    $initial = Invoke-RestMethod -Uri "$BaseUrl/api/state" -TimeoutSec ([int]$cfg.requestTimeoutSeconds)
-    foreach ($x in @($initial.notifications)) { if ($x.id) { [void]$script:SeenIds.Add([string]$x.id) } }
-    Update-ConnectionState $true
-} catch { Update-ConnectionState $false }
+if (Test-Commander) {
+    try {
+        $initial = Invoke-CommanderGet '/api/state'
+        foreach ($x in @($initial.notifications)) { if ($x.id) { [void]$script:SeenIds.Add([string]$x.id) } }
+        Update-ConnectionState $true
+    } catch { [void](Test-Commander); Update-ConnectionState $false }
+} else {
+    Update-ConnectionState $false
+}
 $timer.Start()
 
 $exitTrayItem.add_Click({

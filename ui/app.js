@@ -2,7 +2,7 @@
 'use strict';
 
 const $ = s => document.querySelector(s);
-const state = { data:null, analytics:null, replay:null, portfolioReplay:null, optimizer:null, filter:{ram:new Set(),disk:new Set()}, ui:{settingsInitialized:false,dirtySections:new Set(),stateRefresh:null,analyticsRefresh:null,lastStateError:'',pendingTargets:new Map()} };
+const state = { data:null, analytics:null, replay:null, portfolioReplay:null, optimizer:null, filter:{ram:new Set(),disk:new Set()}, ui:{settingsInitialized:false,dirtySections:new Set(),stateRefresh:null,analyticsRefresh:null,lastStateError:'',pendingTargets:new Map()}, auth:{required:null,authenticated:false,token:'',waitPromise:null,waitResolve:null,dialogMandatory:false,storedTokenInvalid:false} };
 const diskLabels = {nvme:'NVMe',ssd:'SATA SSD',hdd:'HDD',other:'Other'};
 const notificationEventLabels = {
   AVAILABLE:'库存出现', DC_CHANGE:'机房变化', SOLD_OUT:'售罄', ORDER_SUCCESS:'下单成功',
@@ -10,12 +10,108 @@ const notificationEventLabels = {
   PRICE_BLOCKED:'付款策略阻止', CREDENTIALS_MISSING:'OVH 凭证缺失', POLL_ERROR:'轮询错误', HEARTBEAT:'心跳'
 };
 
+function storedApiToken(){
+  return sessionStorage.getItem('kscApiToken') || localStorage.getItem('kscApiToken') || '';
+}
+function setStoredApiToken(token,remember){
+  sessionStorage.removeItem('kscApiToken'); localStorage.removeItem('kscApiToken');
+  if(!token)return;
+  (remember?localStorage:sessionStorage).setItem('kscApiToken',token);
+}
+function hasStoredApiToken(){return !!storedApiToken()}
+function setAuthMessage(text='',kind='status'){
+  const el=$('#authMessage'); if(!el)return;
+  el.textContent=text; el.classList.toggle('error',kind==='error'); el.classList.toggle('success',kind==='success');
+}
+function syncAuthConnectButton(){
+  const b=$('#authConnect'),i=$('#apiTokenInput'); if(!b||!i)return;
+  b.disabled=!i.value.trim();
+}
+function renderAuthDialogState(message=''){
+  const authenticated=!!state.auth.authenticated,stored=hasStoredApiToken();
+  const connect=$('#authConnect'),forget=$('#authForget'),remember=$('#rememberApiToken');
+  if(connect)connect.textContent=authenticated?'更换 Token':(state.auth.storedTokenInvalid?'重新认证':'连接');
+  if(forget){
+    forget.hidden=!authenticated&&!stored;
+    forget.textContent=authenticated?'注销并清除本地 Token':'清除已保存 Token';
+  }
+  if(remember)remember.checked=!!localStorage.getItem('kscApiToken');
+  if(message)setAuthMessage(message);
+  else if(authenticated)setAuthMessage('当前已认证。可输入新 Token 更换认证，或直接关闭此窗口。','success');
+  else if(state.auth.storedTokenInvalid)setAuthMessage('已保存的 Token 无效或服务器 Token 已变更。请输入新 Token，或清除已保存 Token。','error');
+  else setAuthMessage('当前未认证，浏览器未保存 Token。请输入 Commander API Token。');
+  syncAuthConnectButton();
+}
+function authHeaders(token=state.auth.token){ return token?{'Authorization':`Bearer ${token}`}:{ }; }
+function updateAuthUi(){
+  const b=$('#authStatusBtn'); if(!b)return;
+  if(state.auth.required===false){b.textContent='🔓 API 鉴权未启用';b.classList.remove('auth-ok','auth-bad');return}
+  if(state.auth.authenticated){b.textContent='🔐 API 已认证';b.classList.add('auth-ok');b.classList.remove('auth-bad')}
+  else{b.textContent='🔒 API 未认证';b.classList.add('auth-bad');b.classList.remove('auth-ok')}
+}
+function beginAuthWait(){
+  if(!state.auth.waitPromise)state.auth.waitPromise=new Promise(resolve=>{state.auth.waitResolve=resolve});
+  return state.auth.waitPromise;
+}
+function finishAuthWait(){
+  const r=state.auth.waitResolve;state.auth.waitResolve=null;state.auth.waitPromise=null;if(r)r(true);
+}
+function setAuthDialogMandatory(mandatory){
+  state.auth.dialogMandatory=!!mandatory;
+  const close=$('#authClose'),cancel=$('#authCancel');
+  if(close)close.hidden=state.auth.dialogMandatory;
+  if(cancel)cancel.hidden=state.auth.dialogMandatory;
+}
+function closeAuthDialog(){
+  if(state.auth.dialogMandatory)return false;
+  const d=$('#authDialog'); if(d?.open)d.close();
+  return true;
+}
+function showAuthDialog(message='',mandatory=false){
+  const d=$('#authDialog'); if(!d)return;
+  setAuthDialogMandatory(mandatory);
+  const input=$('#apiTokenInput'),toggle=$('#authTokenToggle');
+  if(input)input.type='password';
+  if(toggle){toggle.textContent='👁';toggle.setAttribute('aria-label','显示 Token');toggle.title='显示 Token'}
+  renderAuthDialogState(message);
+  $('#authHttpWarning').textContent=(location.protocol==='http:'&&!['127.0.0.1','localhost','::1'].includes(location.hostname))?'⚠ 当前使用 HTTP，Token 会以明文经过网络；建议仅用于可信 LAN/VPN，跨不可信网络请使用 HTTPS/WireGuard/Tailscale。':'';
+  if(!d.open)d.showModal();
+  setTimeout(()=>$('#apiTokenInput')?.focus(),0);
+}
+async function validateApiToken(token){
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);
+  try{
+    const r=await fetch('/api/auth/check',{headers:{...authHeaders(token)},signal:controller.signal,cache:'no-store'});
+    const data=await r.json().catch(()=>({}));
+    return {ok:r.ok&&data.authenticated===true,data,status:r.status};
+  }catch(e){return {ok:false,error:e};}finally{clearTimeout(timer)}
+}
+async function initAuth(){
+  const r=await fetch('/api/health',{cache:'no-store'}); const h=await r.json();
+  state.auth.required=!!h.authRequired;
+  if(!state.auth.required){state.auth.authenticated=true;state.auth.token='';updateAuthUi();return true}
+  const token=storedApiToken();
+  state.auth.storedTokenInvalid=false;
+  if(token){
+    const v=await validateApiToken(token);
+    if(v.ok){state.auth.token=token;state.auth.authenticated=true;state.auth.storedTokenInvalid=false;updateAuthUi();return true}
+    state.auth.storedTokenInvalid=true;
+  }
+  state.auth.authenticated=false;state.auth.token='';updateAuthUi();beginAuthWait();showAuthDialog('',true);
+  await state.auth.waitPromise;return true;
+}
+function handleUnauthorized(){
+  state.auth.required=true;state.auth.authenticated=false;state.auth.token='';state.auth.storedTokenInvalid=hasStoredApiToken();updateAuthUi();beginAuthWait();showAuthDialog('',true);
+}
 async function api(path, method='GET', body=null, timeoutMs=30000){
+  if(state.auth.required&&!state.auth.authenticated)await beginAuthWait();
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),timeoutMs);
   try{
-    const r=await fetch(path,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null,signal:controller.signal,cache:'no-store'});
+    const headers={'Content-Type':'application/json',...authHeaders()};
+    const r=await fetch(path,{method,headers,body:body?JSON.stringify(body):null,signal:controller.signal,cache:'no-store'});
     const data=await r.json().catch(()=>({}));
+    if(r.status===401){handleUnauthorized();throw new Error('API 未认证')}
     if(!r.ok)throw new Error(data.error||`${r.status} ${r.statusText}`);
     return data;
   }catch(e){
@@ -23,6 +119,17 @@ async function api(path, method='GET', body=null, timeoutMs=30000){
     throw e;
   }finally{clearTimeout(timer)}
 }
+async function apiBlob(path,timeoutMs=30000){
+  if(state.auth.required&&!state.auth.authenticated)await beginAuthWait();
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
+  try{
+    const r=await fetch(path,{headers:{...authHeaders()},signal:controller.signal,cache:'no-store'});
+    if(r.status===401){handleUnauthorized();throw new Error('API 未认证')}
+    if(!r.ok){const data=await r.json().catch(()=>({}));throw new Error(data.error||`${r.status} ${r.statusText}`)}
+    return await r.blob();
+  }finally{clearTimeout(timer)}
+}
+
 function applySavedSettings(result,section){
   if(result?.settings&&state.data)state.data.settings=result.settings;
   if(section==='runtime')clearSettingsDirty();else clearSectionDirty(section);
@@ -601,9 +708,12 @@ async function refreshAnalytics(){
   state.ui.analyticsRefresh=task;
   try{return await task}finally{if(state.ui.analyticsRefresh===task)state.ui.analyticsRefresh=null}
 }
-function exportAnalytics(){
+async function exportAnalytics(){
   const target=$('#analyticsTarget').value||'',days=$('#analyticsLookback').value||'30';
-  window.location.href=`/api/analytics/export?targetId=${encodeURIComponent(target)}&lookbackDays=${encodeURIComponent(days)}`;
+  try{
+    const blob=await apiBlob(`/api/analytics/export?targetId=${encodeURIComponent(target)}&lookbackDays=${encodeURIComponent(days)}`,30000);
+    const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`kimsufi-stock-history-${new Date().toISOString().replace(/[:.]/g,'-')}.csv`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(e){toast(e.message)}
 }
 
 function syncReplayTargets(){
@@ -863,8 +973,52 @@ $('#analyticsTarget').addEventListener('change',refreshAnalytics); $('#analytics
 $('#replayDcMode').addEventListener('change',updateReplayDcUi); $('#runReplay').addEventListener('click',runReplay); $('#exportReplay').addEventListener('click',exportReplay); $('#runPortfolioReplay').addEventListener('click',runPortfolioReplay); $('#runOptimizer').addEventListener('click',runOptimizer); $('#exportOptimizer').addEventListener('click',exportOptimizer);
 $('#refreshAnalytics').addEventListener('click',refreshAnalytics); $('#exportAnalytics').addEventListener('click',exportAnalytics);
 
-refreshState(true);
-refreshAnalytics();
-setInterval(()=>{void refreshState(false)},3000);
-setInterval(()=>{void refreshAnalytics()},15000);
+$('#authConnect').addEventListener('click',async()=>{
+  const token=$('#apiTokenInput').value.trim(); if(!token){setAuthMessage('Token 不能为空。','error');syncAuthConnectButton();return}
+  setAuthMessage('正在验证…');
+  const v=await validateApiToken(token);
+  if(!v.ok){setAuthMessage(v.status===401?'Token 无效，请检查后重试。':'无法验证 Token，请检查网络或后端状态。','error');return}
+  state.auth.token=token;state.auth.authenticated=true;state.auth.storedTokenInvalid=false;
+  setStoredApiToken(token,$('#rememberApiToken').checked);
+  $('#apiTokenInput').value='';syncAuthConnectButton();setAuthMessage('');updateAuthUi();$('#authDialog').close();finishAuthWait();
+  void refreshState(true);void refreshAnalytics();
+});
+$('#authForget').addEventListener('click',()=>{
+  const wasAuthenticated=state.auth.authenticated;
+  setStoredApiToken('',false);state.auth.token='';state.auth.authenticated=!state.auth.required;state.auth.storedTokenInvalid=false;updateAuthUi();
+  $('#apiTokenInput').value='';syncAuthConnectButton();
+  if(state.auth.required){
+    beginAuthWait();
+    showAuthDialog(wasAuthenticated?'已注销并清除本地 Token。请输入新 Token 重新认证。':'已保存 Token 已清除，请输入新 Token。',true);
+  }
+});
+$('#authStatusBtn').addEventListener('click',()=>{
+  if(state.auth.required){
+    state.auth.storedTokenInvalid=!state.auth.authenticated&&hasStoredApiToken();
+    showAuthDialog('',!state.auth.authenticated);
+  }
+});$('#authClose').addEventListener('click',()=>closeAuthDialog());
+$('#authCancel').addEventListener('click',()=>closeAuthDialog());
+$('#authDialog').addEventListener('cancel',e=>{
+  e.preventDefault();
+  closeAuthDialog();
+});
+$('#authDialog').addEventListener('click',e=>{
+  if(e.target===$('#authDialog'))closeAuthDialog();
+});
+$('#apiTokenInput').addEventListener('input',syncAuthConnectButton);
+$('#apiTokenInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&!$('#authConnect').disabled){e.preventDefault();$('#authConnect').click()}});
+$('#authTokenToggle').addEventListener('click',()=>{
+  const i=$('#apiTokenInput'),b=$('#authTokenToggle');
+  const showing=i.type==='text'; i.type=showing?'password':'text';
+  b.textContent=showing?'👁':'🙈'; b.setAttribute('aria-label',showing?'显示 Token':'隐藏 Token'); b.title=showing?'显示 Token':'隐藏 Token';
+  i.focus();
+});
+
+(async()=>{
+  try{await initAuth();await refreshState(true);await refreshAnalytics();}
+  catch(e){toast('初始化失败：'+e.message);return}
+  setInterval(()=>{void refreshState(false)},3000);
+  setInterval(()=>{void refreshAnalytics()},15000);
+})();
 })();

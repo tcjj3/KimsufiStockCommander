@@ -191,3 +191,18 @@ availability 配置与当前 cart option 集合计算 `orderable / availability_
 保留现有 `data/` 即可。新增 `KimsufiTray.json` 和 `KimsufiServer.json`。
 本机一体模式保持默认配置即可。远程 Tray 将 `startBackend=false`、`allowStopBackend=false`，并把 `serverHost/serverPort` 指向 Commander 所在主机。
 浏览器升级后建议 Ctrl+F5 一次。
+
+
+## v0.19 -> v0.20
+
+无需迁移 `data/`。鉴权默认关闭。远程部署建议生成 `KSC_API_TOKEN`，将 `KimsufiServer.json` 的 `authEnabled` 改为 true，然后重启 Commander；每台远程 Tray 设置同一环境变量并重启。浏览器首次访问会弹 Token 输入框。升级后建议 Ctrl+F5。
+
+
+## v0.20.1 -> v0.20.2
+
+无需迁移数据。此版本只整理浏览器认证 UI/状态机。升级后建议 Ctrl+F5 强制刷新前端资源。
+
+
+## v0.20.2 -> v0.20.3
+
+无需迁移数据。认证逻辑没有变化；仅调整浏览器认证弹窗布局与样式。升级后建议 Ctrl+F5。
