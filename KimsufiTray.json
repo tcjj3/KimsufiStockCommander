@@ -8,5 +8,5 @@
   "allowStopBackend": true,
   "requestTimeoutSeconds": 3,
   "notificationPollMs": 3000,
-  "apiTokenEnv": "KSC_API_TOKEN"
+  "apiTokenEnv": "KSC_READ_TOKEN"
 }

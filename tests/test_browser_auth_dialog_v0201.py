@@ -10,7 +10,7 @@ assert "showAuthDialog(message='',mandatory=false)" in js
 assert "e.target===$('#authDialog')" in js
 assert "$('#authClose').addEventListener('click'" in js
 assert "$('#authCancel').addEventListener('click'" in js
-assert "showAuthDialog('',!state.auth.authenticated);" in js
+assert "showAuthDialog('',!state.auth.authenticated)" in js
 assert 'id="authClose"' in html
 assert 'id="authCancel"' in html
 print('browser auth dialog v0.20.1: OK')

@@ -44,3 +44,10 @@ When remote access is required, enable Bearer Token authentication in `KimsufiSe
 Authentication does not encrypt HTTP traffic. If the browser/Tray reaches Commander over HTTP, the Bearer Token is visible to an on-path observer. Use HTTPS or a trusted encrypted tunnel/VPN across untrusted networks. The browser UI warns on non-loopback HTTP and hides that warning automatically under HTTPS.
 
 If `authEnabled=true` but the token is missing or too short, Commander intentionally refuses to start.
+## Read / Admin capability model (v0.21.9+)
+
+Remote deployments should prefer separate `KSC_READ_TOKEN` and `KSC_ADMIN_TOKEN` values. Read clients can inspect state and analytics but cannot mutate Commander state. Admin actions are enforced by the backend capability layer; changing or re-enabling a disabled control in browser developer tools does not bypass authorization.
+
+The Web UI and Tray support step-up Admin authorization. One-shot authorization uses the Admin token only for the requested operation. Session elevation is intentionally temporary. Admin tokens should not be stored in source-controlled JSON.
+
+Only a confirmed HTTP 401 is treated as an invalid token. Network failure or timeout means the token was **not verified**, not that it was incorrect.

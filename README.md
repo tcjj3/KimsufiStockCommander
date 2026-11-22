@@ -2,7 +2,7 @@
 
 **Kimsufi Stock Commander** is a Windows-first visual dashboard for Kimsufi stock monitoring, exact configuration tracking, pricing, datacenter strategy, notifications, historical analysis, replay/optimization, and conservative automatic ordering.
 
-> **Current public release:** v0.20.3  
+> **Current public release:** v0.21.9  
 > **License:** MIT  
 > **Status:** independent community project; not affiliated with OVHcloud/Kimsufi.
 
@@ -106,6 +106,39 @@ py -3 .\KimsufiStockCommander.py --open-browser
 ```
 
 Do not place real credentials in source files or JSON configuration.
+
+## v0.21.9 access control and Tray step-up
+
+v0.21.9 upgrades the single-token model into a capability-based **Read / Admin** model with step-up authorization:
+
+- `KSC_READ_TOKEN` is intended for long-lived read-only clients;
+- `KSC_ADMIN_TOKEN` grants administrative capabilities;
+- legacy `KSC_API_TOKEN` remains supported as an Admin-compatible fallback;
+- Read-mode Web controls remain visible and are marked as privileged actions;
+- clicking an Admin action can authorize **only this operation** or elevate the current browser session to Admin;
+- browser Admin elevation is session-only and can be explicitly dropped back to Read;
+- remote Tray defaults to Read and supports the same one-shot / session Admin step-up model;
+- Tray runtime HTTP is asynchronous, so a stalled/offline Commander does not freeze the WinForms UI;
+- network timeout, connectivity failure, 401, 403 and server errors are reported separately;
+- Admin verification ignores stale/duplicate callbacks and only HTTP 401 is treated as an invalid token;
+- Tray uses a per-Commander single-instance mutex and preserves Windows PowerShell 5.1 UTF-8 BOM compatibility.
+
+Recommended remote deployment:
+
+```json
+{
+  "authEnabled": true,
+  "readTokenEnv": "KSC_READ_TOKEN",
+  "adminTokenEnv": "KSC_ADMIN_TOKEN",
+  "authTokenEnv": "KSC_API_TOKEN"
+}
+```
+
+Generate Read + Admin tokens with:
+
+```powershell
+powershell -File .\\generate-api-token.ps1
+```
 
 ## Web/API authentication (v0.20+)
 

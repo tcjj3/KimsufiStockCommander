@@ -17,13 +17,13 @@ def req(url,token=None,json_mode=True):
     except urllib.error.HTTPError as e:return e.code,json.loads(e.read().decode())
 def main():
     with tempfile.TemporaryDirectory() as td:
-        Handler.commander=FakeCommander(td);Handler.auth_enabled=True;Handler.auth_token='A'*32;Handler.auth_token_env='KSC_API_TOKEN'
+        Handler.commander=FakeCommander(td);Handler.auth_enabled=True;Handler.read_token='';Handler.admin_token='';Handler.legacy_token='A'*32;Handler.auth_mode='legacy-single'
         srv=ThreadingHTTPServer(('127.0.0.1',0),Handler);threading.Thread(target=srv.serve_forever,daemon=True).start();base=f'http://127.0.0.1:{srv.server_address[1]}'
         try:
             c,h=req(base+'/api/health');assert c==200 and h['authRequired'] and not h['authenticated'] and 'secretMetric' not in h
             c,e=req(base+'/api/state');assert c==401 and e['authRequired']
             c,e=req(base+'/api/state','wrong');assert c==401
-            c,a=req(base+'/api/auth/check','A'*32);assert c==200 and a['authenticated']
+            c,a=req(base+'/api/auth/check','A'*32);assert c==200 and a['authenticated'] and a['role']=='admin'
             c,st=req(base+'/api/state','A'*32);assert c==200 and st['secretState']=='protected'
             c,h2=req(base+'/api/health','A'*32);assert h2['secretMetric']==123 and h2['authenticated']
             c,body=req(base+'/app.js',None,False);assert c==200 and 'public shell' in body

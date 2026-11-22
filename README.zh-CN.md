@@ -2,7 +2,7 @@
 
 Kimsufi Stock Commander 是一个面向 Windows 的 Kimsufi 可视化库存监控与保守自动下单控制台，支持精确配置、机房策略、付款周期/价格模式、预算闸门、通知、库存历史、回放、策略优化，以及可选的 Web/API Bearer Token 鉴权。
 
-> **当前公开版本：v0.20.3**  
+> **当前公开版本：v0.21.9**  
 > **许可证：MIT**  
 > 本项目为独立社区工具，与 OVHcloud/Kimsufi 无隶属或官方支持关系。
 
@@ -102,6 +102,39 @@ py -3 .\KimsufiStockCommander.py --open-browser
 ```
 
 不要把真实凭证写进源码或 JSON。
+
+## v0.21.9：Read / Admin 与临时提权
+
+v0.21.9 将原来的单 Token 鉴权升级为 capability-based 的 **Read / Admin 双层权限模型**：
+
+- `KSC_READ_TOKEN` 用于长期只读客户端；
+- `KSC_ADMIN_TOKEN` 用于管理员能力；
+- 旧 `KSC_API_TOKEN` 继续兼容，并作为 Admin 兼容回退；
+- Read 模式下管理员功能仍然可见，并以权限标记区分；
+- 点击管理员功能后，可选择“仅执行此次”或“提升为 Admin（本次会话）”；
+- 浏览器 Admin 提权只保存在 sessionStorage，可主动降回 Read；
+- 远程 Tray 默认只持有 Read Token，并支持同样的单次/会话 Admin Step-up；
+- Tray 运行期 HTTP 全部异步化，Commander 卡住或退出时 WinForms UI 不再假死；
+- 超时、断网、401、403 与服务端错误分别提示，不再把网络故障误判为 Token 错误；
+- Admin 验证带 generation/request-id，迟到/重复回调不会重复弹窗；
+- Tray 对同一 Commander 地址启用单实例 Mutex，并继续保证 Windows PowerShell 5.1 UTF-8 BOM 兼容。
+
+推荐远程配置：
+
+```json
+{
+  "authEnabled": true,
+  "readTokenEnv": "KSC_READ_TOKEN",
+  "adminTokenEnv": "KSC_ADMIN_TOKEN",
+  "authTokenEnv": "KSC_API_TOKEN"
+}
+```
+
+默认生成 Read + Admin 两枚 Token：
+
+```powershell
+powershell -File .\\generate-api-token.ps1
+```
 
 ## Web/API 鉴权（v0.20+）
 

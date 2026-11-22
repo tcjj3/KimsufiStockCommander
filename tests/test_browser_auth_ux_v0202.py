@@ -5,10 +5,10 @@ html=(root/'ui'/'index.html').read_text(encoding='utf-8')
 css=(root/'ui'/'styles.css').read_text(encoding='utf-8')
 
 assert 'storedTokenInvalid:false' in js
-assert 'function hasStoredApiToken()' in js
+assert 'function hasStoredBaseToken()' in js
 assert "forget.hidden=!authenticated&&!stored" in js
 assert "forget.textContent=authenticated?'注销并清除本地 Token':'清除已保存 Token'" in js
-assert "connect.textContent=authenticated?'更换 Token':(state.auth.storedTokenInvalid?'重新认证':'连接')" in js
+assert "connect.textContent=authenticated?'更换访问 Token':(state.auth.storedTokenInvalid?'重新认证':'连接')" in js
 assert 'Token 无效，请检查后重试。' in js
 assert "$('#apiTokenInput').addEventListener('input',syncAuthConnectButton)" in js
 assert "$('#authTokenToggle').addEventListener('click'" in js

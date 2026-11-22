@@ -206,3 +206,23 @@ availability 配置与当前 cart option 集合计算 `orderable / availability_
 ## v0.20.2 -> v0.20.3
 
 无需迁移数据。认证逻辑没有变化；仅调整浏览器认证弹窗布局与样式。升级后建议 Ctrl+F5。
+
+## v0.20.3 -> v0.21.9
+
+无需迁移 `data/`。建议升级后浏览器执行一次 **Ctrl+F5**。
+
+v0.21.9 推荐使用双 Token：
+
+- `KSC_READ_TOKEN`：长期 Read 客户端；
+- `KSC_ADMIN_TOKEN`：管理员能力；
+- `KSC_API_TOKEN`：旧单 Token 兼容回退，仍按 Admin 处理。
+
+直接运行：
+
+```powershell
+powershell -File .\\generate-api-token.ps1
+```
+
+默认会生成并写入 Read + Admin 两枚用户环境变量。远程 Tray 默认使用 `KSC_READ_TOKEN`，管理员操作可临时输入 Admin Token，选择仅执行此次或提升当前 Tray 会话。
+
+Windows PowerShell 5.1 用户应保留发行包中的原始 `.ps1` 文件编码；v0.21.9 的 PowerShell 脚本使用 UTF-8 with BOM。

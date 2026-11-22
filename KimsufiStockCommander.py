@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Kimsufi Stock Commander v0.20
+Kimsufi Stock Commander v0.21.9
 Windows-first local web dashboard for TheoBrigitte/kimsufi-notifier.
 
 Design goals:
@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
 import uuid
 
-APP_VERSION = "0.20.3"
+APP_VERSION = "0.21.9"
 CATALOG_OPTION_CACHE_SCHEMA = 2
 DEFAULT_PORT = 8765
 KNOWN_DCS = ["bhs", "fra", "gra", "hil", "lon", "par", "rbx", "sbg", "sgp", "syd", "vin", "waw", "ynm", "yyz"]
@@ -56,7 +56,7 @@ OVH_API_BASES = {
 }
 
 DEFAULT_SETTINGS: dict[str, Any] = {
-    "exe": r"%USERPROFILE%\go\bin\kimsufi-notifier.exe",
+    "exe": str(Path.home() / "go" / "bin" / "kimsufi-notifier.exe"),
     "endpoint": "ovh-eu",
     "country": "IE",
     "category": "kimsufi",
@@ -4806,13 +4806,35 @@ def format_command(args: list[str]) -> str:
 
 class Handler(BaseHTTPRequestHandler):
     commander: Commander
-    server_version = "KimsufiStockCommander/0.20"
+    server_version = "KimsufiStockCommander/0.21"
     auth_enabled: bool = False
-    auth_token: str = ""
-    auth_token_env: str = "KSC_API_TOKEN"
+    read_token: str = ""
+    admin_token: str = ""
+    legacy_token: str = ""
+    auth_mode: str = "disabled"
+    read_token_env: str = "KSC_READ_TOKEN"
+    admin_token_env: str = "KSC_ADMIN_TOKEN"
+    legacy_token_env: str = "KSC_API_TOKEN"
+
+    READ_CAPABILITIES = (
+        "state:read",
+        "notifications:read",
+        "analytics:read",
+        "pricing:read",
+        "replay:run",
+        "optimizer:run",
+    )
+    ADMIN_CAPABILITIES = READ_CAPABILITIES + (
+        "settings:write",
+        "runtime:control",
+        "notifications:test",
+        "targets:write",
+        "pricing:scan",
+        "orders:control",
+        "automation:control",
+    )
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        # Quiet default access log; operational logs are written separately.
         return
 
     def _presented_bearer_token(self) -> str:
@@ -4820,17 +4842,42 @@ class Handler(BaseHTTPRequestHandler):
         m = re.match(r"^\s*Bearer\s+(.+?)\s*$", raw, flags=re.IGNORECASE)
         return m.group(1) if m else ""
 
-    def _is_authenticated(self) -> bool:
-        if not self.auth_enabled:
-            return True
-        presented = self._presented_bearer_token()
-        expected = str(self.auth_token or "")
+    @staticmethod
+    def _token_matches(presented: str, expected: str) -> bool:
         if not presented or not expected:
             return False
         return hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
 
+    def _auth_role(self) -> str:
+        if not self.auth_enabled:
+            return "admin"
+        presented = self._presented_bearer_token()
+        # Admin is tested first deliberately.  Equal read/admin tokens are rejected
+        # at startup, but this ordering also preserves legacy single-token semantics.
+        if self._token_matches(presented, self.admin_token):
+            return "admin"
+        if self._token_matches(presented, self.read_token):
+            return "read"
+        if self._token_matches(presented, self.legacy_token):
+            return "admin"
+        return ""
+
+    def _capabilities_for_role(self, role: str) -> list[str]:
+        if role == "admin":
+            return list(self.ADMIN_CAPABILITIES)
+        if role == "read":
+            return list(self.READ_CAPABILITIES)
+        return []
+
+    def _admin_available(self) -> bool:
+        return (not self.auth_enabled) or bool(self.admin_token or self.legacy_token)
+
     def _send_unauthorized(self) -> None:
-        data = json.dumps({"error": "authentication required", "authRequired": True}, ensure_ascii=False).encode("utf-8")
+        data = json.dumps({
+            "error": "authentication_required",
+            "authRequired": True,
+            "authenticated": False,
+        }, ensure_ascii=False).encode("utf-8")
         self.send_response(HTTPStatus.UNAUTHORIZED)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -4840,11 +4887,32 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _require_auth(self) -> bool:
-        if self._is_authenticated():
-            return True
+    def _send_forbidden(self, capability: str) -> None:
+        self._send_json({
+            "error": "admin_required",
+            "authenticated": True,
+            "role": "read",
+            "requiredRole": "admin",
+            "requiredCapability": capability,
+            "adminAvailable": self._admin_available(),
+            "authMode": self.auth_mode,
+        }, HTTPStatus.FORBIDDEN)
+
+    def _require_authenticated(self) -> str:
+        role = self._auth_role()
+        if role:
+            return role
         self._send_unauthorized()
-        return False
+        return ""
+
+    def _require_capability(self, capability: str) -> str:
+        role = self._require_authenticated()
+        if not role:
+            return ""
+        if capability in self._capabilities_for_role(role):
+            return role
+        self._send_forbidden(capability)
+        return ""
 
     def _send_json(self, obj: Any, status: int = 200) -> None:
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -4906,10 +4974,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         p = urlparse(self.path)
         if p.path == "/api/health":
-            authenticated = self._is_authenticated()
-            if self.auth_enabled and not authenticated:
-                # Public liveness endpoint intentionally exposes no operational
-                # state beyond version + whether authentication is required.
+            role = self._auth_role()
+            if self.auth_enabled and not role:
                 self._send_json({
                     "ok": True,
                     "version": APP_VERSION,
@@ -4920,24 +4986,40 @@ class Handler(BaseHTTPRequestHandler):
                 health = dict(self.commander.health_status())
                 health.update({
                     "authRequired": bool(self.auth_enabled),
-                    "authenticated": bool(authenticated),
+                    "authenticated": bool(role),
+                    "role": role or "admin",
+                    "capabilities": self._capabilities_for_role(role or "admin"),
+                    "adminAvailable": self._admin_available(),
+                    "authMode": self.auth_mode,
                 })
                 self._send_json(health)
             return
-
         if p.path == "/api/auth/check":
-            if not self._require_auth():
+            role = self._require_authenticated()
+            if not role:
                 return
             self._send_json({
                 "ok": True,
                 "version": APP_VERSION,
                 "authRequired": bool(self.auth_enabled),
                 "authenticated": True,
+                "role": role,
+                "capabilities": self._capabilities_for_role(role),
+                "adminAvailable": self._admin_available(),
+                "authMode": self.auth_mode,
             })
             return
 
-        if p.path.startswith("/api/") and not self._require_auth():
-            return
+        get_caps = {
+            "/api/state": "state:read",
+            "/api/notifications": "notifications:read",
+            "/api/analytics": "analytics:read",
+            "/api/analytics/export": "analytics:read",
+        }
+        if p.path.startswith("/api/"):
+            cap = get_caps.get(p.path, "state:read")
+            if not self._require_capability(cap):
+                return
 
         if p.path == "/api/state":
             self._send_json(self.commander.snapshot())
@@ -4966,16 +5048,44 @@ class Handler(BaseHTTPRequestHandler):
         if p.path.startswith("/api/"):
             self._send_json({"error": "not found"}, 404)
             return
-        # Static UI assets remain readable without authentication. They contain
-        # no API token or account data; the UI itself prompts before /api/* use.
         self._serve_file(p.path)
 
     def do_POST(self) -> None:
         p = urlparse(self.path)
-        if p.path.startswith("/api/") and not self._require_auth():
-            return
+        # Authenticate before reading/parsing the request body.  This preserves
+        # v0.20's fail-closed boundary even though v0.21 chooses a more specific
+        # capability after inspecting the already-authenticated payload.
+        role = ""
+        if p.path.startswith("/api/"):
+            role = self._require_authenticated()
+            if not role:
+                return
         try:
             payload = self._read_json()
+            if p.path == "/api/settings":
+                cap = "automation:control" if "autoOrderArmed" in payload else "settings:write"
+            else:
+                post_caps = {
+                    "/api/catalog/refresh": "runtime:control",
+                    "/api/poll": "runtime:control",
+                    "/api/notifications/test": "notifications:test",
+                    "/api/replay": "replay:run",
+                    "/api/replay/portfolio": "replay:run",
+                    "/api/optimizer": "optimizer:run",
+                    "/api/target": "targets:write",
+                    "/api/target/remove": "targets:write",
+                    "/api/target/resolve-options": "targets:write",
+                    "/api/prices": "pricing:read",
+                    "/api/prices/scan": "pricing:scan",
+                    "/api/prices/config-scan": "pricing:scan",
+                    "/api/pricing/diagnostics": "pricing:read",
+                    "/api/target/clear-review": "orders:control",
+                }
+                cap = post_caps.get(p.path, "state:read")
+            if p.path.startswith("/api/") and cap not in self._capabilities_for_role(role):
+                self._send_forbidden(cap)
+                return
+
             if p.path == "/api/settings":
                 self._send_json({"settings": self.commander.update_settings(payload)})
             elif p.path == "/api/catalog/refresh":
@@ -4993,7 +5103,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(self.commander.portfolio_replay(payload))
             elif p.path == "/api/optimizer":
                 self._send_json(self.commander.optimize_strategies(payload))
-            elif p.path == "/api/target":                self._send_json({"target": self.commander.upsert_target(payload)})
+            elif p.path == "/api/target":
+                self._send_json({"target": self.commander.upsert_target(payload)})
             elif p.path == "/api/target/remove":
                 self.commander.remove_target(str(payload.get("id", "")))
                 self._send_json({"ok": True})
@@ -5045,6 +5156,10 @@ def _server_security_config(root: Path) -> dict[str, Any]:
     raw = load_json(root / "KimsufiServer.json", {})
     return {
         "authEnabled": bool(raw.get("authEnabled", False)),
+        # v0.21 capability tokens.  authTokenEnv remains as the legacy single-
+        # token fallback so v0.20 installations upgrade without breaking.
+        "readTokenEnv": str(raw.get("readTokenEnv", "KSC_READ_TOKEN") or "KSC_READ_TOKEN").strip(),
+        "adminTokenEnv": str(raw.get("adminTokenEnv", "KSC_ADMIN_TOKEN") or "KSC_ADMIN_TOKEN").strip(),
         "authTokenEnv": str(raw.get("authTokenEnv", "KSC_API_TOKEN") or "KSC_API_TOKEN").strip(),
     }
 
@@ -5054,15 +5169,42 @@ def main() -> int:
     root = Path(__file__).resolve().parent
     security = _server_security_config(root)
     auth_enabled = bool(security.get("authEnabled"))
-    auth_token_env = str(security.get("authTokenEnv") or "KSC_API_TOKEN")
-    auth_token = str(os.environ.get(auth_token_env, "") or "")
-    if auth_enabled and len(auth_token) < 24:
-        print(
-            f"API authentication is enabled but environment variable {auth_token_env!r} "
-            "is missing or too short (minimum 24 characters). Refusing to start.",
-            file=sys.stderr,
-        )
-        return 3
+    read_token_env = str(security.get("readTokenEnv") or "KSC_READ_TOKEN")
+    admin_token_env = str(security.get("adminTokenEnv") or "KSC_ADMIN_TOKEN")
+    legacy_token_env = str(security.get("authTokenEnv") or "KSC_API_TOKEN")
+    read_token = str(os.environ.get(read_token_env, "") or "")
+    admin_token = str(os.environ.get(admin_token_env, "") or "")
+    legacy_token = str(os.environ.get(legacy_token_env, "") or "")
+    auth_mode = "disabled"
+    if auth_enabled:
+        # If either new capability token is configured, v0.21 mode is active and
+        # the legacy token is intentionally ignored.  Otherwise KSC_API_TOKEN is
+        # preserved as a single Admin token for backwards compatibility.
+        using_capability_tokens = bool(read_token or admin_token)
+        for env_name, token in ((read_token_env, read_token), (admin_token_env, admin_token)):
+            if token and len(token) < 24:
+                print(f"API token environment variable {env_name!r} is too short (minimum 24 characters). Refusing to start.", file=sys.stderr)
+                return 3
+        if using_capability_tokens:
+            legacy_token = ""
+            if read_token and admin_token and hmac.compare_digest(read_token.encode("utf-8"), admin_token.encode("utf-8")):
+                print("KSC_READ_TOKEN and KSC_ADMIN_TOKEN must be different values. Refusing to start.", file=sys.stderr)
+                return 3
+            if read_token and admin_token:
+                auth_mode = "read-admin"
+            elif read_token:
+                auth_mode = "read-only"
+            else:
+                auth_mode = "admin-only"
+        else:
+            if len(legacy_token) < 24:
+                print(
+                    f"API authentication is enabled but none of {read_token_env!r}, {admin_token_env!r}, "
+                    f"or legacy {legacy_token_env!r} contains a valid token (minimum 24 characters). Refusing to start.",
+                    file=sys.stderr,
+                )
+                return 3
+            auth_mode = "legacy-single"
 
     # Hold both a folder-local lock and a per-user global lock for the full
     # process lifetime.  The global lock prevents two v0.18+ copies extracted in
@@ -5087,8 +5229,13 @@ def main() -> int:
     commander = Commander(root, demo=args.demo)
     Handler.commander = commander
     Handler.auth_enabled = auth_enabled
-    Handler.auth_token = auth_token if auth_enabled else ""
-    Handler.auth_token_env = auth_token_env
+    Handler.read_token = read_token if auth_enabled else ""
+    Handler.admin_token = admin_token if auth_enabled else ""
+    Handler.legacy_token = legacy_token if auth_enabled else ""
+    Handler.auth_mode = auth_mode
+    Handler.read_token_env = read_token_env
+    Handler.admin_token_env = admin_token_env
+    Handler.legacy_token_env = legacy_token_env
     commander.start_worker()
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
@@ -5097,7 +5244,7 @@ def main() -> int:
     print(f"Kimsufi Stock Commander v{APP_VERSION}")
     print(f"Dashboard: {url}")
     print(f"Mode: {'DEMO (checkout blocked)' if args.demo else 'LIVE backend (auto-order remains disarmed until enabled in UI)'}")
-    print(f"API auth: {'ENABLED (' + auth_token_env + ')' if auth_enabled else 'disabled'}")
+    print(f"API auth: {'ENABLED (' + auth_mode + ')' if auth_enabled else 'disabled'}")
     if args.open_browser:
         threading.Timer(0.7, lambda: webbrowser.open(url)).start()
     try:

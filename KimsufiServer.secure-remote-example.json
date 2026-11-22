@@ -3,5 +3,7 @@
   "port": 8765,
   "openBrowser": true,
   "authEnabled": true,
+  "readTokenEnv": "KSC_READ_TOKEN",
+  "adminTokenEnv": "KSC_ADMIN_TOKEN",
   "authTokenEnv": "KSC_API_TOKEN"
 }

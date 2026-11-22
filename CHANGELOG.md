@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.21.9
+
+Capability-based Read/Admin access-control release.
+
+Highlights:
+
+- separate Read and Admin tokens with legacy single-token compatibility;
+- capability-aware API authorization and explicit `403 admin_required` responses;
+- Web step-up authorization: one-shot Admin action or session Admin elevation;
+- privileged controls remain visible in Read mode and are visually marked;
+- remote Tray defaults to Read and supports one-shot/session Admin elevation;
+- session Admin can be explicitly dropped back to Read;
+- token helper generates Read + Admin tokens by default and is compatible with Windows PowerShell 5.1;
+- PowerShell scripts are UTF-8 with BOM and reject smart-quote regressions;
+- WinForms Admin dialog uses a native Windows shield icon;
+- Tray network traffic is asynchronous and no longer blocks the UI when Commander is slow/offline;
+- timeout/network/401/403/5xx semantics are separated;
+- Admin verification de-duplicates stale callbacks;
+- per-Commander Tray single-instance mutex uses a safe hashed instance key.
+
+
 ## v0.20.3
 
 Authentication and remote-management release.

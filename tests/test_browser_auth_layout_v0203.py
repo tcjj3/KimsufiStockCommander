@@ -6,7 +6,7 @@ css=(root/'ui'/'styles.css').read_text(encoding='utf-8')
 
 assert 'class="auth-remember"' in html
 assert 'class="auth-remember-copy"' in html
-assert '保存到 localStorage；仅建议用于你自己的受信任设备' in html
+assert '推荐保存 Read Token；双 Token 模式下 Admin Token 不会写入 localStorage' in html
 assert 'class="dialog-actions auth-actions"' in html
 assert '.auth-remember{display:flex!important' in css
 assert '.auth-remember input[type=checkbox]' in css

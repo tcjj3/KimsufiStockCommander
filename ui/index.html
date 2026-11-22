@@ -15,9 +15,9 @@
     </div>
     <div class="top-actions">
       <button id="authStatusBtn" class="secondary auth-status">🔐 API 鉴权检测中…</button>
-      <button id="refreshCatalog">刷新目录</button>
-      <button id="pollNow">立即轮询</button>
-      <label class="arm-switch">
+      <button id="refreshCatalog" data-admin-action="刷新服务器目录">刷新目录</button>
+      <button id="pollNow" data-admin-action="立即执行库存轮询">立即轮询</button>
+      <label class="arm-switch admin-guarded" data-admin-action="控制自动下单总开关">
         <input id="globalArm" type="checkbox">
         <span>自动下单总开关</span>
       </label>
@@ -74,7 +74,7 @@
     </div>
   </section>
 
-  <section class="panel" id="strategySettingsPanel">
+  <section class="panel admin-surface" id="strategySettingsPanel" data-admin-surface="机房策略">
     <div class="panel-head">
       <h2>机房策略</h2>
       <span><span id="strategyDirtyHint" class="hint"></span> <span class="hint">只决定“有货时是否允许下单以及选哪个 DC”，不影响目录筛选。</span></span>
@@ -111,7 +111,7 @@
     <div id="strategySummary" class="strategy-summary"></div>
   </section>
 
-  <section class="panel" id="budgetSettingsPanel">
+  <section class="panel admin-surface" id="budgetSettingsPanel" data-admin-surface="预算策略">
     <div class="panel-head">
       <h2>预算策略</h2>
       <span><span id="budgetDirtyHint" class="hint"></span> <span class="hint">按配置周期价 + 缓冲做“预算占用”；不是最终信用卡账单的精确预测。无人值守自动支付默认要求启用有限总预算。</span></span>
@@ -136,7 +136,7 @@
       <label>每单固定缓冲
         <input id="budgetBufferFixed" type="number" min="0" step="0.01" value="0">
       </label>
-      <div class="budget-save"><button id="saveBudget" class="primary">保存预算策略</button></div>
+      <div class="budget-save"><button id="saveBudget" class="primary" data-admin-action="保存预算策略">保存预算策略</button></div>
     </div>
     <div id="budgetSummary" class="strategy-summary"></div>
     <details class="budget-ledger">
@@ -145,7 +145,7 @@
     </details>
   </section>
 
-  <section class="panel" id="notificationSettingsPanel">
+  <section class="panel admin-surface" id="notificationSettingsPanel" data-admin-surface="通知设置">
     <div class="panel-head">
       <h2>通知与无人值守</h2>
       <span><span id="notificationDirtyHint" class="hint"></span> <span class="hint">桌面通知由 Windows 托盘外壳显示；Telegram 由后台直接发送。</span></span>
@@ -164,8 +164,8 @@
         <input id="telegramTokenEnv" type="text" placeholder="KSC_TELEGRAM_BOT_TOKEN">
       </label>
       <div class="notify-actions">
-        <button id="saveNotifications" class="primary">保存通知设置</button>
-        <button id="testNotifications">发送测试通知</button>
+        <button id="saveNotifications" class="primary" data-admin-action="保存通知设置">保存通知设置</button>
+        <button id="testNotifications" data-admin-action="发送测试通知">发送测试通知</button>
       </div>
     </div>
     <div class="small-title">推送事件</div>
@@ -389,7 +389,7 @@
     </div>
   </section>
 
-  <section class="panel" id="runtimeSettingsPanel">
+  <section class="panel admin-surface" id="runtimeSettingsPanel" data-admin-surface="运行参数">
     <div class="panel-head"><h2>运行参数</h2><span id="settingsDirtyHint" class="hint"></span></div>
     <div class="grid settings-grid">
       <label>kimsufi-notifier.exe
@@ -416,7 +416,7 @@
       </label>
       <div class="payment-scan-field">
         <span class="hint" id="paymentScanStatus">付款组合按当前 Endpoint/Country/目录动态发现</span>
-        <button id="scanPaymentProfiles" type="button" disabled>等待服务器目录…</button>
+        <button id="scanPaymentProfiles" type="button" data-admin-action="扫描付款组合与配置价格" disabled>等待服务器目录…</button>
       </div>
       <label>默认 price-duration
         <input id="priceDuration" type="text" placeholder="P1M">
@@ -428,7 +428,7 @@
         <input id="autoPay" type="checkbox"> 自动支付（--auto-pay）
       </label>
     </div>
-    <button id="saveSettings" class="primary">保存运行参数</button>
+    <button id="saveSettings" class="primary" data-admin-action="保存运行参数">保存运行参数</button>
     <p class="hint">OVH_APP_KEY / OVH_APP_SECRET / OVH_CONSUMER_KEY 只从服务器进程环境变量读取，不写入浏览器或配置文件。“配置月租价格上限”按 P1M/default 的精确配置月价做初筛；如果配置月价未知且启用了上限，自动下单会保守阻止。预算预检和主表周期价都使用同一套 OVH public cart API 原始价格模型。价格均为未税估算，setup fee/其他一次性费用若 CLI 未暴露，不纳入该数值，需由固定/百分比预算缓冲覆盖。</p>
   </section>
 
@@ -468,10 +468,10 @@
         </label>
       </div>
       <div class="dialog-actions">
-        <button id="resolveOptions" type="button">自动解析下单选项</button>
+        <button id="resolveOptions" type="button" data-admin-action="解析并保存下单选项">自动解析下单选项</button>
         <button id="loadPrices" type="button">读取付款周期</button>
-        <button id="clearReview" type="button" class="danger-soft">清除 REVIEW</button>
-        <button id="saveAdvanced" type="button" class="primary">保存</button>
+        <button id="clearReview" type="button" class="danger-soft" data-admin-action="清除 REVIEW 安全锁">清除 REVIEW</button>
+        <button id="saveAdvanced" type="button" class="primary" data-admin-action="保存目标高级设置">保存</button>
       </div>
       <div id="priceProfileDetail" class="strategy-summary"></div>
       <pre id="reviewText" class="review-text"></pre>
@@ -481,28 +481,56 @@
   <dialog id="authDialog" class="dialog auth-dialog">
     <form method="dialog" class="dialog-card auth-card" id="authForm">
       <div class="dialog-head auth-dialog-head"><h3>🔐 Commander API 认证</h3><button id="authClose" type="button" class="dialog-close" aria-label="关闭认证窗口" title="关闭">×</button></div>
-      <p class="hint" id="authHint">此 Commander 要求 Bearer Token。Token 只用于调用当前页面同源 API。</p>
+      <p class="hint" id="authHint">此 Commander 要求 Bearer Token。Read 用于日常查看；🛡 Admin 操作可按需临时提权。</p>
       <div class="auth-field">
         <label for="apiTokenInput" class="auth-field-label">API Token</label>
         <div class="auth-token-row">
-          <input id="apiTokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 KSC_API_TOKEN">
+          <input id="apiTokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 KSC_READ_TOKEN / KSC_ADMIN_TOKEN">
           <button id="authTokenToggle" type="button" class="secondary auth-token-toggle" aria-label="显示 Token" title="显示 Token">👁</button>
         </div>
       </div>
       <label class="auth-remember" for="rememberApiToken">
         <input id="rememberApiToken" type="checkbox">
         <span class="auth-remember-copy">
-          <strong>在此浏览器记住 Token</strong>
-          <small>保存到 localStorage；仅建议用于你自己的受信任设备</small>
+          <strong>在此浏览器记住访问 Token</strong>
+          <small>推荐保存 Read Token；双 Token 模式下 Admin Token 不会写入 localStorage</small>
         </span>
       </label>
       <div id="authMessage" class="auth-message" aria-live="polite"></div>
       <div class="dialog-actions auth-actions">
         <button id="authConnect" type="button" class="primary" disabled>连接</button>
+        <button id="authElevate" type="button" class="secondary" hidden>🛡 提升为 Admin</button>
+        <button id="authDowngrade" type="button" class="secondary" hidden>降回 Read</button>
         <button id="authCancel" type="button" class="secondary">关闭</button>
         <button id="authForget" type="button" class="secondary auth-forget">注销并清除本地 Token</button>
       </div>
       <p class="hint auth-http-warning" id="authHttpWarning"></p>
+    </form>
+  </dialog>
+
+  <dialog id="adminAuthDialog" class="dialog auth-dialog admin-auth-dialog">
+    <form method="dialog" class="dialog-card auth-card">
+      <div class="dialog-head auth-dialog-head"><h3>🛡 管理员授权</h3></div>
+      <p id="adminActionText" class="admin-action-text">此操作需要 Admin 权限。</p>
+      <p id="adminCapabilityText" class="hint admin-capability"></p>
+      <div class="auth-field">
+        <label for="adminTokenInput" class="auth-field-label">Admin Token</label>
+        <div class="auth-token-row">
+          <input id="adminTokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 KSC_ADMIN_TOKEN">
+          <button id="adminTokenToggle" type="button" class="secondary auth-token-toggle" aria-label="显示 Token" title="显示 Token">👁</button>
+        </div>
+      </div>
+      <div id="adminAuthMessage" class="auth-message" aria-live="polite"></div>
+      <div class="elevation-choice-note">
+        <strong>仅执行此次操作</strong>：Token 仅用于重放当前请求，完成后立即丢弃。<br>
+        <strong>提升为 Admin</strong>：Token 只保存在 sessionStorage，关闭本次浏览器会话后自动失效。
+      </div>
+      <div class="dialog-actions auth-actions elevation-actions">
+        <button id="adminOnce" type="button" class="primary" disabled>仅执行此次操作</button>
+        <button id="adminSession" type="button" class="secondary" disabled>提升为 Admin（本次会话）</button>
+        <button id="adminCancel" type="button" class="secondary">取消</button>
+      </div>
+      <p class="hint auth-http-warning" id="adminHttpWarning"></p>
     </form>
   </dialog>
 

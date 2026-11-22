@@ -2,7 +2,7 @@
 'use strict';
 
 const $ = s => document.querySelector(s);
-const state = { data:null, analytics:null, replay:null, portfolioReplay:null, optimizer:null, filter:{ram:new Set(),disk:new Set()}, ui:{settingsInitialized:false,dirtySections:new Set(),stateRefresh:null,analyticsRefresh:null,lastStateError:'',pendingTargets:new Map()}, auth:{required:null,authenticated:false,token:'',waitPromise:null,waitResolve:null,dialogMandatory:false,storedTokenInvalid:false} };
+const state = { data:null, analytics:null, replay:null, portfolioReplay:null, optimizer:null, filter:{ram:new Set(),disk:new Set()}, ui:{settingsInitialized:false,dirtySections:new Set(),stateRefresh:null,analyticsRefresh:null,lastStateError:'',pendingTargets:new Map()}, auth:{required:null,authenticated:false,role:'',capabilities:[],baseToken:'',adminToken:'',waitPromise:null,waitResolve:null,dialogMandatory:false,storedTokenInvalid:false,adminAvailable:false,authMode:'',elevationPromise:null,elevationResolve:null,elevationReject:null,elevationContext:null} };
 const diskLabels = {nvme:'NVMe',ssd:'SATA SSD',hdd:'HDD',other:'Other'};
 const notificationEventLabels = {
   AVAILABLE:'库存出现', DC_CHANGE:'机房变化', SOLD_OUT:'售罄', ORDER_SUCCESS:'下单成功',
@@ -10,44 +10,106 @@ const notificationEventLabels = {
   PRICE_BLOCKED:'付款策略阻止', CREDENTIALS_MISSING:'OVH 凭证缺失', POLL_ERROR:'轮询错误', HEARTBEAT:'心跳'
 };
 
-function storedApiToken(){
-  return sessionStorage.getItem('kscApiToken') || localStorage.getItem('kscApiToken') || '';
+function legacyStoredCredential(){
+  const session=sessionStorage.getItem('kscApiToken')||'', local=localStorage.getItem('kscApiToken')||'';
+  if(session)return {token:session,remember:false,legacy:true};
+  if(local)return {token:local,remember:true,legacy:true};
+  return {token:'',remember:false,legacy:true};
 }
-function setStoredApiToken(token,remember){
-  sessionStorage.removeItem('kscApiToken'); localStorage.removeItem('kscApiToken');
+function storedReadCredential(){
+  const session=sessionStorage.getItem('kscReadToken')||'', local=localStorage.getItem('kscReadToken')||'';
+  if(session)return {token:session,remember:false,legacy:false};
+  if(local)return {token:local,remember:true,legacy:false};
+  return legacyStoredCredential();
+}
+function storedAdminToken(){return sessionStorage.getItem('kscAdminToken')||''}
+function clearLegacyToken(){sessionStorage.removeItem('kscApiToken');localStorage.removeItem('kscApiToken')}
+function setStoredReadToken(token,remember){
+  sessionStorage.removeItem('kscReadToken');localStorage.removeItem('kscReadToken');clearLegacyToken();
+  if(!token)return;
+  (remember?localStorage:sessionStorage).setItem('kscReadToken',token);
+}
+function setStoredLegacyToken(token,remember){
+  clearLegacyToken();
   if(!token)return;
   (remember?localStorage:sessionStorage).setItem('kscApiToken',token);
 }
-function hasStoredApiToken(){return !!storedApiToken()}
+function setAdminSessionToken(token){
+  sessionStorage.removeItem('kscAdminToken');
+  if(token)sessionStorage.setItem('kscAdminToken',token);
+}
+function hasStoredBaseToken(){return !!storedReadCredential().token}
 function setAuthMessage(text='',kind='status'){
   const el=$('#authMessage'); if(!el)return;
+  el.textContent=text; el.classList.toggle('error',kind==='error'); el.classList.toggle('success',kind==='success');
+}
+function setAdminMessage(text='',kind='status'){
+  const el=$('#adminAuthMessage'); if(!el)return;
   el.textContent=text; el.classList.toggle('error',kind==='error'); el.classList.toggle('success',kind==='success');
 }
 function syncAuthConnectButton(){
   const b=$('#authConnect'),i=$('#apiTokenInput'); if(!b||!i)return;
   b.disabled=!i.value.trim();
 }
+function syncAdminButtons(){
+  const v=!!$('#adminTokenInput')?.value.trim();
+  if($('#adminOnce'))$('#adminOnce').disabled=!v;
+  if($('#adminSession'))$('#adminSession').disabled=!v;
+}
+function effectiveApiToken(){
+  if(state.auth.role==='admin'&&state.auth.adminToken)return state.auth.adminToken;
+  return state.auth.baseToken||'';
+}
+function authHeaders(token=effectiveApiToken()){ return token?{'Authorization':`Bearer ${token}`}:{ }; }
+function hasCapability(cap){return state.auth.role==='admin'||(state.auth.capabilities||[]).includes(cap)}
+function adminActionLabel(path){
+  const labels={
+    '/api/settings':'修改 Commander 设置','/api/catalog/refresh':'刷新服务器目录','/api/poll':'立即执行库存轮询',
+    '/api/notifications/test':'发送测试通知','/api/target':'修改监控/自动下单目标','/api/target/remove':'删除监控目标',
+    '/api/target/resolve-options':'解析并写入下单选项','/api/prices/scan':'扫描付款组合','/api/prices/config-scan':'扫描配置价格',
+    '/api/target/clear-review':'清除订单 REVIEW 安全锁'
+  };
+  return labels[path]||'执行管理员操作';
+}
+function updateAdminControlMarkers(){
+  const role=state.auth.required===false?'admin':state.auth.role;
+  document.body.classList.toggle('auth-read-role',role==='read');
+  document.body.classList.toggle('auth-admin-role',role==='admin');
+  document.body.classList.toggle('auth-anonymous-role',!role);
+  document.querySelectorAll('[data-admin-action]').forEach(el=>{
+    const action=el.dataset.adminAction||'管理员操作';
+    el.title=role==='read'?`🛡 ${action} · 点击后请求 Admin 授权`:`🛡 ${action} · Admin 功能`;
+  });
+}
 function renderAuthDialogState(message=''){
-  const authenticated=!!state.auth.authenticated,stored=hasStoredApiToken();
-  const connect=$('#authConnect'),forget=$('#authForget'),remember=$('#rememberApiToken');
-  if(connect)connect.textContent=authenticated?'更换 Token':(state.auth.storedTokenInvalid?'重新认证':'连接');
+  const authenticated=!!state.auth.authenticated,role=state.auth.role,stored=hasStoredBaseToken();
+  const connect=$('#authConnect'),forget=$('#authForget'),remember=$('#rememberApiToken'),elevate=$('#authElevate'),down=$('#authDowngrade');
+  if(connect)connect.textContent=authenticated?'更换访问 Token':(state.auth.storedTokenInvalid?'重新认证':'连接');
   if(forget){
     forget.hidden=!authenticated&&!stored;
     forget.textContent=authenticated?'注销并清除本地 Token':'清除已保存 Token';
   }
-  if(remember)remember.checked=!!localStorage.getItem('kscApiToken');
+  if(remember){
+    remember.checked=!!localStorage.getItem('kscReadToken')||!!localStorage.getItem('kscApiToken');
+    remember.closest('.auth-remember').hidden=(role==='admin'&&state.auth.authMode!=='legacy-single');
+  }
+  if(elevate)elevate.hidden=!(authenticated&&role==='read'&&state.auth.adminAvailable);
+  if(down)down.hidden=!(authenticated&&role==='admin'&&!!state.auth.baseToken&&state.auth.adminToken!==state.auth.baseToken);
   if(message)setAuthMessage(message);
-  else if(authenticated)setAuthMessage('当前已认证。可输入新 Token 更换认证，或直接关闭此窗口。','success');
-  else if(state.auth.storedTokenInvalid)setAuthMessage('已保存的 Token 无效或服务器 Token 已变更。请输入新 Token，或清除已保存 Token。','error');
-  else setAuthMessage('当前未认证，浏览器未保存 Token。请输入 Commander API Token。');
+  else if(role==='admin')setAuthMessage(state.auth.authMode==='legacy-single'?'当前为 Admin（兼容单 Token 模式）。':'当前为 Admin（本次会话）。可主动降回 Read。','success');
+  else if(role==='read')setAuthMessage('当前为 Read。🛡 管理员操作会在点击时请求临时授权。','success');
+  else if(state.auth.storedTokenInvalid)setAuthMessage('已保存的访问 Token 无效或服务器 Token 已变更。请输入新 Token，或清除已保存 Token。','error');
+  else setAuthMessage('当前未认证，浏览器未保存访问 Token。请输入 Read Token（推荐）或 Admin Token。');
   syncAuthConnectButton();
 }
-function authHeaders(token=state.auth.token){ return token?{'Authorization':`Bearer ${token}`}:{ }; }
 function updateAuthUi(){
   const b=$('#authStatusBtn'); if(!b)return;
-  if(state.auth.required===false){b.textContent='🔓 API 鉴权未启用';b.classList.remove('auth-ok','auth-bad');return}
-  if(state.auth.authenticated){b.textContent='🔐 API 已认证';b.classList.add('auth-ok');b.classList.remove('auth-bad')}
-  else{b.textContent='🔒 API 未认证';b.classList.add('auth-bad');b.classList.remove('auth-ok')}
+  b.classList.remove('auth-ok','auth-bad','auth-read','auth-admin');
+  if(state.auth.required===false){b.textContent='🔓 API 鉴权未启用';b.classList.add('auth-ok');updateAdminControlMarkers();return}
+  if(state.auth.role==='admin'){b.textContent=state.auth.authMode==='legacy-single'?'🛡 Admin':'🛡 Admin · 本次会话';b.classList.add('auth-ok','auth-admin')}
+  else if(state.auth.role==='read'){b.textContent='👁 Read';b.classList.add('auth-ok','auth-read')}
+  else{b.textContent='🔒 API 未认证';b.classList.add('auth-bad')}
+  updateAdminControlMarkers();
 }
 function beginAuthWait(){
   if(!state.auth.waitPromise)state.auth.waitPromise=new Promise(resolve=>{state.auth.waitResolve=resolve});
@@ -67,16 +129,17 @@ function closeAuthDialog(){
   const d=$('#authDialog'); if(d?.open)d.close();
   return true;
 }
+function setPasswordToggle(inputId,buttonId,showing){
+  const i=$(inputId),b=$(buttonId); if(!i||!b)return;
+  i.type=showing?'text':'password'; b.textContent=showing?'🙈':'👁';
+  b.setAttribute('aria-label',showing?'隐藏 Token':'显示 Token'); b.title=showing?'隐藏 Token':'显示 Token';
+}
 function showAuthDialog(message='',mandatory=false){
   const d=$('#authDialog'); if(!d)return;
-  setAuthDialogMandatory(mandatory);
-  const input=$('#apiTokenInput'),toggle=$('#authTokenToggle');
-  if(input)input.type='password';
-  if(toggle){toggle.textContent='👁';toggle.setAttribute('aria-label','显示 Token');toggle.title='显示 Token'}
+  setAuthDialogMandatory(mandatory); setPasswordToggle('#apiTokenInput','#authTokenToggle',false);
   renderAuthDialogState(message);
   $('#authHttpWarning').textContent=(location.protocol==='http:'&&!['127.0.0.1','localhost','::1'].includes(location.hostname))?'⚠ 当前使用 HTTP，Token 会以明文经过网络；建议仅用于可信 LAN/VPN，跨不可信网络请使用 HTTPS/WireGuard/Tailscale。':'';
-  if(!d.open)d.showModal();
-  setTimeout(()=>$('#apiTokenInput')?.focus(),0);
+  if(!d.open)d.showModal(); setTimeout(()=>$('#apiTokenInput')?.focus(),0);
 }
 async function validateApiToken(token){
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);
@@ -86,32 +149,126 @@ async function validateApiToken(token){
     return {ok:r.ok&&data.authenticated===true,data,status:r.status};
   }catch(e){return {ok:false,error:e};}finally{clearTimeout(timer)}
 }
+function applyValidatedIdentity(token,data,{remember=false,source='manual'}={}){
+  const role=data.role||'admin';
+  state.auth.required=true;state.auth.authenticated=true;state.auth.role=role;state.auth.capabilities=data.capabilities||[];
+  state.auth.adminAvailable=data.adminAvailable!==false;state.auth.authMode=data.authMode||'';state.auth.storedTokenInvalid=false;
+  if(role==='read'){
+    state.auth.baseToken=token;state.auth.adminToken='';setAdminSessionToken('');
+    if(source==='manual'||source==='legacy-migration')setStoredReadToken(token,remember);
+  }else{
+    if(data.authMode==='legacy-single'){
+      state.auth.baseToken=token;state.auth.adminToken=token;
+      if(source==='manual')setStoredLegacyToken(token,remember);
+    }else{
+      state.auth.adminToken=token;setAdminSessionToken(token);
+      if(source==='legacy-migration')clearLegacyToken();
+    }
+  }
+  updateAuthUi();
+}
 async function initAuth(){
   const r=await fetch('/api/health',{cache:'no-store'}); const h=await r.json();
   state.auth.required=!!h.authRequired;
-  if(!state.auth.required){state.auth.authenticated=true;state.auth.token='';updateAuthUi();return true}
-  const token=storedApiToken();
+  if(!state.auth.required){state.auth.authenticated=true;state.auth.role='admin';state.auth.capabilities=[];state.auth.adminAvailable=true;state.auth.authMode='disabled';updateAuthUi();return true}
+
+  // Session Admin always wins, but a stored Read token is retained underneath so
+  // the user can explicitly downgrade without logging in again.
+  const base=storedReadCredential();
+  const admin=storedAdminToken();
+  if(admin){
+    const av=await validateApiToken(admin);
+    if(av.ok&&av.data.role==='admin'){
+      if(base.token){const bv=await validateApiToken(base.token);if(bv.ok&&bv.data.role==='read')state.auth.baseToken=base.token}
+      applyValidatedIdentity(admin,av.data,{source:'session-admin'});return true;
+    }
+    setAdminSessionToken('');
+  }
+
   state.auth.storedTokenInvalid=false;
-  if(token){
-    const v=await validateApiToken(token);
-    if(v.ok){state.auth.token=token;state.auth.authenticated=true;state.auth.storedTokenInvalid=false;updateAuthUi();return true}
+  if(base.token){
+    const v=await validateApiToken(base.token);
+    if(v.ok){
+      const source=base.legacy?'legacy-migration':'stored';
+      applyValidatedIdentity(base.token,v.data,{remember:base.remember,source});
+      return true;
+    }
     state.auth.storedTokenInvalid=true;
   }
-  state.auth.authenticated=false;state.auth.token='';updateAuthUi();beginAuthWait();showAuthDialog('',true);
+  state.auth.authenticated=false;state.auth.role='';state.auth.baseToken='';state.auth.adminToken='';updateAuthUi();beginAuthWait();showAuthDialog('',true);
   await state.auth.waitPromise;return true;
 }
-function handleUnauthorized(){
-  state.auth.required=true;state.auth.authenticated=false;state.auth.token='';state.auth.storedTokenInvalid=hasStoredApiToken();updateAuthUi();beginAuthWait();showAuthDialog('',true);
+function clearAdminElevation(){
+  setAdminSessionToken('');state.auth.adminToken='';
+  if(state.auth.baseToken){state.auth.role='read';state.auth.authenticated=true;state.auth.capabilities=[]}
+  else{state.auth.role='';state.auth.authenticated=false}
+  updateAuthUi();
 }
-async function api(path, method='GET', body=null, timeoutMs=30000){
+function handleUnauthorized(){
+  state.auth.required=true;state.auth.authenticated=false;state.auth.role='';state.auth.baseToken='';state.auth.adminToken='';state.auth.capabilities=[];setAdminSessionToken('');
+  state.auth.storedTokenInvalid=hasStoredBaseToken();updateAuthUi();beginAuthWait();showAuthDialog('',true);
+}
+function showAdminDialog(action,capability,{forceSession=false}={}){
+  const d=$('#adminAuthDialog'); if(!d)return Promise.reject(new Error('管理员授权窗口不可用'));
+  if(state.auth.elevationPromise)return state.auth.elevationPromise;
+  state.auth.elevationContext={action,capability,forceSession};
+  $('#adminActionText').textContent=`“${action}”需要 Admin 权限。`;
+  $('#adminCapabilityText').textContent=capability?`所需能力：${capability}`:'';
+  $('#adminTokenInput').value=''; setPasswordToggle('#adminTokenInput','#adminTokenToggle',false); setAdminMessage('Admin Token 不会写入 localStorage。');syncAdminButtons();
+  $('#adminOnce').hidden=!!forceSession;
+  $('#adminSession').textContent=forceSession?'提升为 Admin（本次会话）':'提升为 Admin（本次会话）';
+  $('#adminHttpWarning').textContent=(location.protocol==='http:'&&!['127.0.0.1','localhost','::1'].includes(location.hostname))?'⚠ 当前使用 HTTP，Admin Token 会以明文经过网络。':'';
+  state.auth.elevationPromise=new Promise((resolve,reject)=>{state.auth.elevationResolve=resolve;state.auth.elevationReject=reject});
+  d.showModal();setTimeout(()=>$('#adminTokenInput')?.focus(),0);return state.auth.elevationPromise;
+}
+function finishElevation(grant=null,error=null){
+  const resolve=state.auth.elevationResolve,reject=state.auth.elevationReject;
+  state.auth.elevationPromise=null;state.auth.elevationResolve=null;state.auth.elevationReject=null;state.auth.elevationContext=null;
+  const d=$('#adminAuthDialog');if(d?.open)d.close();$('#adminTokenInput').value='';syncAdminButtons();
+  if(error){if(reject)reject(error)}else if(resolve)resolve(grant);
+}
+async function submitAdminElevation(sessionMode){
+  const token=$('#adminTokenInput').value.trim();if(!token){setAdminMessage('Admin Token 不能为空。','error');return}
+  setAdminMessage('正在验证 Admin Token…');
+  const v=await validateApiToken(token);
+  if(!v.ok||v.data.role!=='admin'){setAdminMessage(v.data?.role==='read'?'这是 Read Token，不具备 Admin 权限。':'Admin Token 无效，请检查后重试。','error');return}
+  state.auth.adminAvailable=v.data.adminAvailable!==false;state.auth.authMode=v.data.authMode||state.auth.authMode;
+  if(sessionMode){
+    state.auth.adminToken=token;state.auth.role='admin';state.auth.authenticated=true;state.auth.capabilities=v.data.capabilities||[];setAdminSessionToken(token);updateAuthUi();
+    finishElevation({token,session:true});toast('已提升为 Admin（本次会话）');
+  }else finishElevation({token,session:false});
+}
+async function requestAdminAuthorization(path,capability,action=''){
+  if(state.auth.role==='admin')return {token:effectiveApiToken(),session:true};
+  if(!state.auth.adminAvailable)throw new Error('此 Commander 未配置 Admin Token；当前是只读服务器。');
+  return await showAdminDialog(action||adminActionLabel(path),capability);
+}
+async function api(path, method='GET', body=null, timeoutMs=30000, options={}){
   if(state.auth.required&&!state.auth.authenticated)await beginAuthWait();
+  const token=options.token||effectiveApiToken();
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),timeoutMs);
   try{
-    const headers={'Content-Type':'application/json',...authHeaders()};
+    const headers={'Content-Type':'application/json',...authHeaders(token)};
     const r=await fetch(path,{method,headers,body:body?JSON.stringify(body):null,signal:controller.signal,cache:'no-store'});
     const data=await r.json().catch(()=>({}));
-    if(r.status===401){handleUnauthorized();throw new Error('API 未认证')}
+    if(r.status===401){
+      // A one-shot Admin credential is independent of the base Read identity.
+      if(options.token)throw new Error('临时 Admin Token 已失效，请重新授权');
+      // Expired/changed Admin session: fall back to the still-valid Read token,
+      // then let the normal 403 step-up flow ask again if this is an Admin action.
+      if(state.auth.role==='admin'&&state.auth.baseToken&&state.auth.adminToken&&state.auth.adminToken!==state.auth.baseToken&&!options._downgraded){
+        clearAdminElevation();
+        return await api(path,method,body,timeoutMs,{...options,_downgraded:true});
+      }
+      handleUnauthorized();throw new Error('API 未认证');
+    }
+    if(r.status===403&&data.error==='admin_required'){
+      if(options.noElevation)throw new Error('Admin 权限不足');
+      if(data.adminAvailable===false)throw new Error('此 Commander 未配置 Admin Token；当前是只读服务器。');
+      const grant=await requestAdminAuthorization(path,data.requiredCapability,options.actionLabel||adminActionLabel(path));
+      return await api(path,method,body,timeoutMs,{...options,token:grant.session?undefined:grant.token,noElevation:true});
+    }
     if(!r.ok)throw new Error(data.error||`${r.status} ${r.statusText}`);
     return data;
   }catch(e){
@@ -355,10 +512,10 @@ function renderTable(){
       <td>${orderabilityHtml(r)}</td>
       <td class="decision ${eligible?'yes':'no'}">${eligible?'✓ '+d.dc.toUpperCase():'○ '+esc(!canOrder?'availability-only，不参与自动下单':(!priceOk?(priceKnown?'超出配置月价上限':'配置月价未知'):d.reason))}</td>
       <td>${(()=>{const p=predictionFor(r.id);return p?`<span class="watch-pill band-${esc(p.band)}">${Number(p.watchIndex).toFixed(1)}</span><div class="muted">置信 ${Number(p.confidence).toFixed(0)}%</div>`:'—'})()}</td>
-      <td><input type="checkbox" class="watch" data-id="${esc(r.id)}" ${t?.watch?'checked':''}></td>
-      <td><input type="checkbox" class="auto" data-id="${esc(r.id)}" ${t?.autoOrder?'checked':''} ${(review||!canOrder)?'disabled':''}></td>
-      <td><input type="number" class="priority-input priority" data-id="${esc(r.id)}" min="0" max="100" value="${t?.orderPriority??50}" ${t?'':'disabled'}></td>
-      <td><input type="number" class="qty" data-id="${esc(r.id)}" min="1" max="50" value="${t?.desiredQty||1}" ${t?'':'disabled'}> / ${t?.completedQty||0}</td>
+      <td><span class="admin-input-wrap" data-admin-action="修改监控状态"><input type="checkbox" class="watch admin-control" data-id="${esc(r.id)}" ${t?.watch?'checked':''}><i class="admin-mini-shield">🛡</i></span></td>
+      <td><span class="admin-input-wrap" data-admin-action="修改自动下单目标"><input type="checkbox" class="auto admin-control" data-id="${esc(r.id)}" ${t?.autoOrder?'checked':''} ${(review||!canOrder)?'disabled':''}><i class="admin-mini-shield">🛡</i></span></td>
+      <td><span class="admin-input-wrap admin-input-number" data-admin-action="修改抢购优先级"><input type="number" class="priority-input priority admin-control" data-id="${esc(r.id)}" min="0" max="100" value="${t?.orderPriority??50}" ${t?'':'disabled'}><i class="admin-mini-shield">🛡</i></span></td>
+      <td><span class="admin-input-wrap admin-input-number" data-admin-action="修改目标数量"><input type="number" class="qty admin-control" data-id="${esc(r.id)}" min="1" max="50" value="${t?.desiredQty||1}" ${t?'':'disabled'}><i class="admin-mini-shield">🛡</i></span> / ${t?.completedQty||0}</td>
       <td>${t?.budgetReserveAmount!=null?`${esc(t.budgetCurrency||state.data.budget.currency)} ${Number(t.budgetReserveAmount).toFixed(2)}`:'—'}${t?.budgetValidation==='blocked'?`<div class="budget-block">${esc(t.budgetValidationReason||'预算阻止')}</div>`:''}</td>
       <td class="decision ${review?'review':''}">${esc(status)}${ord.status==='availability_only'?'<div class="ghost-note">Availability-only</div>':(t?.optionResolutionError?'<div class="muted">下单选项待确认</div>':'')}</td>
       <td><button class="advanced" data-id="${esc(r.id)}" ${t?'':'disabled'}>设置</button> <button class="diagnose" data-id="${esc(r.id)}">诊断</button></td>
@@ -377,6 +534,7 @@ function renderTable(){
   document.querySelectorAll('.priority').forEach(el=>el.addEventListener('change',()=>updatePriority(el.dataset.id,el.value)));
   document.querySelectorAll('.advanced').forEach(el=>el.addEventListener('click',()=>openAdvanced(el.dataset.id)));
   document.querySelectorAll('.diagnose').forEach(el=>el.addEventListener('click',()=>openDiagnostics(el.dataset.id)));
+  updateAdminControlMarkers();
 }
 async function openDiagnostics(id){
   const row=state.data.catalog.find(x=>x.id===id);
@@ -839,8 +997,7 @@ async function runOptimizer(){
     prioritySearch:$('#optimizerPrioritySearch').value,
     retainPercent:Math.max(50,Math.min(100,n($('#optimizerRetain').value,95))),
     maxCandidates:Math.max(50,Math.min(20000,Math.floor(n($('#optimizerMaxCandidates').value,5000))))
-  };
-  if($('#optimizerBudgets').value.trim()!=='')payload.budgets=budgets;
+  };  if($('#optimizerBudgets').value.trim()!=='')payload.budgets=budgets;
   $('#optimizerRecommendation').textContent='正在搜索策略空间…';
   try{state.optimizer=await api('/api/optimizer','POST',payload);renderOptimizer()}
   catch(e){toast(e.message);$('#optimizerRecommendation').innerHTML=`<span class="replay-bad">优化失败：${esc(e.message)}</span>`}
@@ -893,7 +1050,7 @@ $('#pollNow').addEventListener('click',async()=>{await api('/api/poll','POST',{}
 $('#globalArm').addEventListener('change',async e=>{
   if(e.target.checked && !confirm('确认武装自动下单？命中库存、机房策略和价格上限后，后台会调用 --auto-pay（若目标启用）并真实提交订单。')){e.target.checked=false;return}
   try{await api('/api/settings','POST',{autoOrderArmed:e.target.checked});await refreshState(false);toast(e.target.checked?'自动下单已武装':'自动下单已解除')}
-  catch(err){toast(err.message)}
+  catch(err){toast(err.message);await refreshState(false)}
 });
 $('#paymentPreset').addEventListener('change',()=>{syncPaymentPresetUi(true);markSettingsDirty()});
 $('#scanPaymentProfiles').addEventListener('click',async()=>{
@@ -978,42 +1135,47 @@ $('#authConnect').addEventListener('click',async()=>{
   setAuthMessage('正在验证…');
   const v=await validateApiToken(token);
   if(!v.ok){setAuthMessage(v.status===401?'Token 无效，请检查后重试。':'无法验证 Token，请检查网络或后端状态。','error');return}
-  state.auth.token=token;state.auth.authenticated=true;state.auth.storedTokenInvalid=false;
-  setStoredApiToken(token,$('#rememberApiToken').checked);
+  const remember=$('#rememberApiToken').checked;
+  applyValidatedIdentity(token,v.data,{remember,source:'manual'});
+  if(v.data.role==='admin'&&v.data.authMode!=='legacy-single'&&remember)toast('Admin Token 仅保存到本次会话，不会写入 localStorage');
   $('#apiTokenInput').value='';syncAuthConnectButton();setAuthMessage('');updateAuthUi();$('#authDialog').close();finishAuthWait();
   void refreshState(true);void refreshAnalytics();
 });
 $('#authForget').addEventListener('click',()=>{
   const wasAuthenticated=state.auth.authenticated;
-  setStoredApiToken('',false);state.auth.token='';state.auth.authenticated=!state.auth.required;state.auth.storedTokenInvalid=false;updateAuthUi();
+  setStoredReadToken('',false);setStoredLegacyToken('',false);setAdminSessionToken('');
+  state.auth.baseToken='';state.auth.adminToken='';state.auth.role='';state.auth.authenticated=!state.auth.required;state.auth.capabilities=[];state.auth.storedTokenInvalid=false;updateAuthUi();
   $('#apiTokenInput').value='';syncAuthConnectButton();
-  if(state.auth.required){
-    beginAuthWait();
-    showAuthDialog(wasAuthenticated?'已注销并清除本地 Token。请输入新 Token 重新认证。':'已保存 Token 已清除，请输入新 Token。',true);
-  }
+  if(state.auth.required){beginAuthWait();showAuthDialog(wasAuthenticated?'已注销并清除本地 Token。请输入 Read Token 或 Admin Token 重新认证。':'已保存 Token 已清除，请重新认证。',true)}
 });
 $('#authStatusBtn').addEventListener('click',()=>{
-  if(state.auth.required){
-    state.auth.storedTokenInvalid=!state.auth.authenticated&&hasStoredApiToken();
-    showAuthDialog('',!state.auth.authenticated);
-  }
-});$('#authClose').addEventListener('click',()=>closeAuthDialog());
-$('#authCancel').addEventListener('click',()=>closeAuthDialog());
-$('#authDialog').addEventListener('cancel',e=>{
-  e.preventDefault();
+  if(state.auth.required){state.auth.storedTokenInvalid=!state.auth.authenticated&&hasStoredBaseToken();showAuthDialog('',!state.auth.authenticated)}
+});
+$('#authElevate').addEventListener('click',()=>{
   closeAuthDialog();
+  showAdminDialog('将当前浏览器会话提升为 Admin','session:elevate',{forceSession:true}).catch(e=>{if(e?.message!=='管理员授权已取消')toast(e.message)});
 });
-$('#authDialog').addEventListener('click',e=>{
-  if(e.target===$('#authDialog'))closeAuthDialog();
+$('#authDowngrade').addEventListener('click',()=>{
+  clearAdminElevation();closeAuthDialog();toast('已降回 Read 权限');
 });
+$('#authClose').addEventListener('click',()=>closeAuthDialog());
+$('#authCancel').addEventListener('click',()=>closeAuthDialog());
+$('#authDialog').addEventListener('cancel',e=>{e.preventDefault();closeAuthDialog()});
+$('#authDialog').addEventListener('click',e=>{if(e.target===$('#authDialog'))closeAuthDialog()});
 $('#apiTokenInput').addEventListener('input',syncAuthConnectButton);
 $('#apiTokenInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&!$('#authConnect').disabled){e.preventDefault();$('#authConnect').click()}});
 $('#authTokenToggle').addEventListener('click',()=>{
-  const i=$('#apiTokenInput'),b=$('#authTokenToggle');
-  const showing=i.type==='text'; i.type=showing?'password':'text';
-  b.textContent=showing?'👁':'🙈'; b.setAttribute('aria-label',showing?'显示 Token':'隐藏 Token'); b.title=showing?'显示 Token':'隐藏 Token';
-  i.focus();
+  const i=$('#apiTokenInput');const showing=i.type==='text';setPasswordToggle('#apiTokenInput','#authTokenToggle',!showing);i.focus();
 });
+
+$('#adminTokenInput').addEventListener('input',syncAdminButtons);
+$('#adminTokenInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&!$('#adminOnce').hidden&&!$('#adminOnce').disabled){e.preventDefault();$('#adminOnce').click()}});
+$('#adminTokenToggle').addEventListener('click',()=>{const i=$('#adminTokenInput');const showing=i.type==='text';setPasswordToggle('#adminTokenInput','#adminTokenToggle',!showing);i.focus()});
+$('#adminOnce').addEventListener('click',()=>submitAdminElevation(false));
+$('#adminSession').addEventListener('click',()=>submitAdminElevation(true));
+$('#adminCancel').addEventListener('click',()=>{if(state.auth.elevationPromise)finishElevation(null,new Error('管理员授权已取消'));else $('#adminAuthDialog').close()});
+$('#adminAuthDialog').addEventListener('cancel',e=>{e.preventDefault();if(state.auth.elevationPromise)finishElevation(null,new Error('管理员授权已取消'));else $('#adminAuthDialog').close()});
+$('#adminAuthDialog').addEventListener('click',e=>{if(e.target===$('#adminAuthDialog')){if(state.auth.elevationPromise)finishElevation(null,new Error('管理员授权已取消'));else e.target.close()}});
 
 (async()=>{
   try{await initAuth();await refreshState(true);await refreshAnalytics();}
