@@ -1,0 +1,103 @@
+name: Finalize v0.20.3 release
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - ".github/workflows/finalize-v0203-release.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v4
+        with:
+          ref: 3d56d9dd77f70cc527907e2b5074ca762ef0e5cb
+          fetch-depth: 0
+
+      - name: Build release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/KimsufiStockCommander-v0.20.3
+          rsync -a --exclude '.git' --exclude 'dist' ./ dist/KimsufiStockCommander-v0.20.3/
+          (cd dist && zip -qr KimsufiStockCommander-v0.20.3.zip KimsufiStockCommander-v0.20.3)
+
+          mkdir -p dist/KimsufiTray-Remote-v0.20.3
+          cp KimsufiTray.ps1 start-tray.cmd generate-api-token.ps1 KimsufiTray.remote-auth-example.json dist/KimsufiTray-Remote-v0.20.3/
+          cp KimsufiTray.remote-auth-example.json dist/KimsufiTray-Remote-v0.20.3/KimsufiTray.json
+          cat > dist/KimsufiTray-Remote-v0.20.3/README.txt <<'EOF'
+          Kimsufi Tray Remote Client v0.20.3
+
+          1. Edit KimsufiTray.json and set serverHost/serverPort.
+          2. Set the same KSC_API_TOKEN environment variable used by Commander.
+          3. Keep startBackend=false and allowStopBackend=false.
+          4. Run start-tray.cmd.
+          EOF
+          (cd dist && zip -qr KimsufiTray-Remote-v0.20.3.zip KimsufiTray-Remote-v0.20.3)
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/release-notes.md <<'EOF'
+          ## Kimsufi Stock Commander v0.20.3
+
+          v0.20.3 adds optional Web/API Bearer Token authentication and completes the remote-management security/UX work introduced across the v0.20.x private testing cycle.
+
+          ### Highlights
+
+          - Optional Bearer Token authentication for Web/API access.
+          - Fail-closed startup when authentication is enabled but the configured token is missing or invalid.
+          - Browser authentication using sessionStorage by default, with optional localStorage persistence.
+          - Authenticated remote Tray requests using an environment-provided token.
+          - Token generation helper and secure remote deployment examples.
+          - Browser auth UI now distinguishes:
+            - no saved token;
+            - saved/stale token;
+            - authenticated state.
+          - Password-masked token input with show/hide control.
+          - Enter-to-submit and disabled empty-token submit.
+          - Auth management dialog can be closed normally after successful authentication.
+          - Improved auth dialog layout and remember-token control.
+          - Dynamic HTTP plaintext-token warning that automatically hides when the page is loaded over HTTPS.
+
+          ### Security notes
+
+          Authentication controls who may call Commander APIs, but HTTP does not encrypt the Bearer Token in transit. For untrusted networks, use HTTPS or a trusted encrypted tunnel/VPN such as WireGuard/Tailscale.
+
+          Auto-order remains fail-closed and still requires the existing quantity, REVIEW, persistent receipt/active-marker and finite-budget protections.
+
+          ### Upgrade
+
+          Existing `data/` can be retained. Authentication is disabled by default. After upgrading, use **Ctrl+F5** once to ensure the browser loads the new frontend assets.
+
+          See README / README.zh-CN / SECURITY.md for configuration details.
+          EOF
+
+          if gh release view v0.20.3 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit v0.20.3 \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Kimsufi Stock Commander v0.20.3" \
+              --notes-file /tmp/release-notes.md \
+              --latest
+          else
+            gh release create v0.20.3 \
+              --repo "$GITHUB_REPOSITORY" \
+              --target 3d56d9dd77f70cc527907e2b5074ca762ef0e5cb \
+              --title "Kimsufi Stock Commander v0.20.3" \
+              --notes-file /tmp/release-notes.md \
+              --latest
+          fi
+
+          gh release upload v0.20.3 \
+            dist/KimsufiStockCommander-v0.20.3.zip \
+            dist/KimsufiTray-Remote-v0.20.3.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
