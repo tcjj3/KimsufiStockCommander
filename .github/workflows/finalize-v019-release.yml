@@ -1,0 +1,69 @@
+name: Finalize v0.19.0 release
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - ".github/workflows/finalize-v019-release.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update GitHub Release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cat > /tmp/release-notes.md <<'EOF'
+          ## Kimsufi Stock Commander v0.19.0
+
+          First public source release of **Kimsufi Stock Commander** — a Windows-first dashboard for Kimsufi stock monitoring, exact configuration tracking, pricing, datacenter strategy, notifications, historical analysis, replay/optimization, and conservative automatic ordering.
+
+          ### Highlights
+
+          - Visual Kimsufi catalog and exact RAM/storage configuration monitoring.
+          - RAM, storage type, availability, orderability and price filtering.
+          - Datacenter policy engine with fixed, allow-list and priority/fallback strategies.
+          - Dynamic payment duration / pricing-mode discovery.
+          - Configuration-level monthly and billing-period price estimates.
+          - Availability/orderability separation for availability-only (“ghost”) configurations.
+          - Fail-closed auto-order flow with desired-quantity tracking, persistent active markers and success receipts.
+          - Ambiguous order outcomes enter persistent **REVIEW** instead of automatic retry.
+          - Finite-budget protection for unattended auto-pay.
+          - Windows Tray integration, desktop/Telegram notifications and autostart helpers.
+          - Remote Tray/backend decoupling with independent host/port/start/stop configuration.
+          - Stock history, Watch Index, historical replay and Pareto strategy optimization.
+          - State snapshot and UI pending-state fixes for long-running unattended operation.
+
+          ### Safety / network note
+
+          **v0.19 does not include Web/API authentication.** The backend binds to `127.0.0.1` by default. If you expose it to a LAN, restrict access with Windows Firewall or another trusted-network control. Do not expose v0.19 directly to the public Internet.
+
+          Auto-order can create real paid orders. Validate the exact target configuration, desired quantity, billing profile, datacenter policy and finite budget before arming it.
+
+          ### Requirements
+
+          - Windows 10/11 or Windows Server
+          - Python 3.10+
+          - [TheoBrigitte/kimsufi-notifier](https://github.com/TheoBrigitte/kimsufi-notifier), installed separately
+          - OVH API credentials only when using live ordering
+
+          ### Documentation
+
+          - [README](https://github.com/tcjj3/KimsufiStockCommander#readme)
+          - [简体中文说明](https://github.com/tcjj3/KimsufiStockCommander/blob/main/README.zh-CN.md)
+          - [Security notes](https://github.com/tcjj3/KimsufiStockCommander/blob/main/SECURITY.md)
+          - [Changelog](https://github.com/tcjj3/KimsufiStockCommander/blob/main/CHANGELOG.md)
+
+          GitHub automatically provides source ZIP and tarball downloads for this tag.
+          EOF
+
+          gh release edit v0.19.0 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Kimsufi Stock Commander v0.19.0" \
+            --notes-file /tmp/release-notes.md \
+            --latest
