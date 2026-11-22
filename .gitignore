@@ -1,0 +1,26 @@
+# Runtime state (may contain order history, settings and operational metadata)
+data/
+diagnostics/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local build / release artifacts
+*.zip
+*.tar.gz
+*.7z
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local-only overrides if you choose to create them
+KimsufiServer.local.json
+KimsufiTray.local.json

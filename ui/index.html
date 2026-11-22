@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Kimsufi Stock Commander</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div>
+      <h1>Kimsufi Stock Commander</h1>
+      <p>目录筛选 · 精确配置库存监控 · 机房策略 · 保守自动下单</p>
+    </div>
+    <div class="top-actions">
+      <button id="refreshCatalog">刷新目录</button>
+      <button id="pollNow">立即轮询</button>
+      <label class="arm-switch">
+        <input id="globalArm" type="checkbox">
+        <span>自动下单总开关</span>
+      </label>
+    </div>
+  </header>
+
+  <section class="status-strip" id="statusStrip"></section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>服务器筛选</h2>
+      <button id="resetFilters" class="secondary">重置</button>
+    </div>
+    <div class="grid filters">
+      <label>搜索
+        <input id="search" type="search" placeholder="KS-LE-6 / 26skle06 / NVMe">
+      </label>
+      <label>库存
+        <select id="stockFilter">
+          <option value="all">全部</option>
+          <option value="available">当前有货</option>
+          <option value="unavailable">当前缺货</option>
+        </select>
+      </label>
+      <label>可下单性
+        <select id="orderabilityFilter">
+          <option value="all">全部</option>
+          <option value="orderable">当前可下单配置</option>
+          <option value="availability_only">Availability-only 幽灵配置</option>
+          <option value="unknown">尚未确认</option>
+        </select>
+      </label>
+      <label>最低配置月价
+        <input id="priceMin" type="number" min="0" step="0.01" placeholder="不限">
+      </label>
+      <label>最高配置月价
+        <input id="priceMax" type="number" min="0" step="0.01" placeholder="不限">
+      </label>
+    </div>
+    <div class="filter-groups">
+      <div>
+        <div class="small-title">内存大小（可多选）</div>
+        <div id="ramFilters" class="chips"></div>
+      </div>
+      <div>
+        <div class="small-title row-inline">硬盘类型（可多选）
+          <select id="diskMode" class="mini">
+            <option value="any">包含任意一种</option>
+            <option value="all">必须同时包含</option>
+          </select>
+        </div>
+        <div id="diskFilters" class="chips"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="strategySettingsPanel">
+    <div class="panel-head">
+      <h2>机房策略</h2>
+      <span><span id="strategyDirtyHint" class="hint"></span> <span class="hint">只决定“有货时是否允许下单以及选哪个 DC”，不影响目录筛选。</span></span>
+    </div>
+    <div class="grid strategy-grid">
+      <label>策略模式
+        <select id="dcMode">
+          <option value="any">任意机房</option>
+          <option value="fixed">固定机房</option>
+          <option value="whitelist">白名单</option>
+          <option value="priority">优先级 + 可选回退</option>
+          <option value="exclude">排除列表</option>
+        </select>
+      </label>
+      <label id="fixedWrap">固定机房
+        <select id="fixedDc"></select>
+      </label>
+      <label>首选无库存时
+        <select id="fallback">
+          <option value="wait">继续等待</option>
+          <option value="any">回退到其他可用机房</option>
+        </select>
+      </label>
+      <label>配置月租价格上限（初筛）
+        <input id="orderPriceCap" type="number" min="0" step="0.01">
+      </label>
+    </div>
+    <div class="small-title">机房选择</div>
+    <div id="dcChecks" class="chips"></div>
+    <div id="priorityBox">
+      <div class="small-title">优先顺序</div>
+      <div id="priorityList" class="priority-list"></div>
+    </div>
+    <div id="strategySummary" class="strategy-summary"></div>
+  </section>
+
+  <section class="panel" id="budgetSettingsPanel">
+    <div class="panel-head">
+      <h2>预算策略</h2>
+      <span><span id="budgetDirtyHint" class="hint"></span> <span class="hint">按配置周期价 + 缓冲做“预算占用”；不是最终信用卡账单的精确预测。无人值守自动支付默认要求启用有限总预算。</span></span>
+    </div>
+    <div class="grid budget-grid">
+      <label class="checkbox-line budget-enable"><input id="budgetEnabled" type="checkbox"> 启用自动下单预算闸门</label>
+      <label>预算币种
+        <input id="budgetCurrency" type="text" value="EUR" maxlength="8">
+      </label>
+      <label>自动购买总预算
+        <input id="budgetTotal" type="number" min="0" step="0.01" placeholder="0 = AutoPay 安全模式下阻止">
+      </label>
+      <label>既有/历史预算占用
+        <input id="budgetBaseline" type="number" min="0" step="0.01" value="0">
+      </label>
+      <label>单次预算占用上限
+        <input id="budgetPerOrderCap" type="number" min="0" step="0.01" placeholder="0 = 不限">
+      </label>
+      <label>自动缓冲比例 %
+        <input id="budgetBufferPercent" type="number" min="0" max="500" step="0.1" value="10">
+      </label>
+      <label>每单固定缓冲
+        <input id="budgetBufferFixed" type="number" min="0" step="0.01" value="0">
+      </label>
+      <div class="budget-save"><button id="saveBudget" class="primary">保存预算策略</button></div>
+    </div>
+    <div id="budgetSummary" class="strategy-summary"></div>
+    <details class="budget-ledger">
+      <summary>最近预算账本</summary>
+      <div id="budgetLedger" class="ledger-list"></div>
+    </details>
+  </section>
+
+  <section class="panel" id="notificationSettingsPanel">
+    <div class="panel-head">
+      <h2>通知与无人值守</h2>
+      <span><span id="notificationDirtyHint" class="hint"></span> <span class="hint">桌面通知由 Windows 托盘外壳显示；Telegram 由后台直接发送。</span></span>
+    </div>
+    <div class="grid notify-grid">
+      <label class="checkbox-line"><input id="notifyEnabled" type="checkbox"> 启用事件通知</label>
+      <label class="checkbox-line"><input id="notifyDesktop" type="checkbox"> Windows 托盘气泡通知</label>
+      <label class="checkbox-line"><input id="telegramEnabled" type="checkbox"> Telegram</label>
+      <label>心跳间隔（小时，0=关闭）
+        <input id="heartbeatHours" type="number" min="0" max="168" step="0.5">
+      </label>
+      <label>Telegram Chat ID
+        <input id="telegramChatId" type="text" placeholder="123456789 或 @channel">
+      </label>
+      <label>Bot Token 环境变量名
+        <input id="telegramTokenEnv" type="text" placeholder="KSC_TELEGRAM_BOT_TOKEN">
+      </label>
+      <div class="notify-actions">
+        <button id="saveNotifications" class="primary">保存通知设置</button>
+        <button id="testNotifications">发送测试通知</button>
+      </div>
+    </div>
+    <div class="small-title">推送事件</div>
+    <div id="notificationEvents" class="chips notify-events"></div>
+    <div id="notificationSummary" class="strategy-summary"></div>
+    <details class="budget-ledger">
+      <summary>最近通知</summary>
+      <div id="notificationHistory" class="ledger-list"></div>
+    </details>
+  </section>
+
+  <section class="panel radar-panel">
+    <div class="panel-head radar-head">
+      <div>
+        <h2>库存雷达 / 补货历史</h2>
+        <span class="hint">统计的是轮询观测窗口；不会反向影响库存监控或自动下单。</span>
+      </div>
+      <div class="radar-controls">
+        <select id="analyticsTarget" aria-label="分析目标"><option value="">全部历史目标</option></select>
+        <select id="analyticsLookback" aria-label="分析时间范围">
+          <option value="7">最近 7 天</option><option value="30" selected>最近 30 天</option>
+          <option value="90">最近 90 天</option><option value="365">最近 1 年</option><option value="0">全部历史</option>
+        </select>
+        <button id="refreshAnalytics">刷新统计</button>
+        <button id="exportAnalytics" class="secondary">导出 CSV</button>
+      </div>
+    </div>
+    <div id="analyticsStats" class="analytics-stats"><div class="muted">正在读取库存历史…</div></div>
+    <div class="predictor-grid">
+      <div class="radar-card predictor-card">
+        <div class="small-title">当前 Watch Index（经验排序，不是概率）</div>
+        <div id="watchIndexSummary" class="watch-index-summary"><div class="muted">等待历史样本…</div></div>
+        <div id="watchComponents" class="watch-components"></div>
+      </div>
+      <div class="radar-card predictor-card">
+        <div class="small-title">未来 24 小时 Watch Index · UTC</div>
+        <div id="watchForecast" class="watch-forecast"><div class="muted">暂无预测曲线</div></div>
+      </div>
+    </div>
+    <div class="small-title radar-table-title">目标 Watch Index 排名</div>
+    <div class="table-scroll predictor-table-scroll">
+      <table class="predictor-table">
+        <thead><tr><th>#</th><th>目标</th><th>指数</th><th>置信度</th><th>时段</th><th>到点程度</th><th>DC 匹配</th><th>捕获余量</th><th>未来峰值 UTC</th></tr></thead>
+        <tbody id="predictionRows"><tr><td colspan="9" class="muted">暂无预测样本</td></tr></tbody>
+      </table>
+    </div>
+    <div class="radar-grid">
+      <div class="radar-card">
+        <div class="small-title">补货出现热力图（星期 × 检测小时）</div>
+        <div class="heatmap-scroll"><div id="stockHeatmap" class="stock-heatmap"></div></div>
+      </div>
+      <div class="radar-card">
+        <div class="small-title">机房出现次数</div>
+        <div id="dcFrequency" class="dc-frequency"></div>
+      </div>
+    </div>
+    <div class="small-title radar-table-title">最近补货窗口</div>
+    <div class="table-scroll radar-table-scroll">
+      <table class="radar-table">
+        <thead><tr><th>目标</th><th>开始</th><th>结束</th><th>观测时长</th><th>机房</th><th>边界误差</th><th>DC 变化</th></tr></thead>
+        <tbody id="episodeRows"><tr><td colspan="7" class="muted">暂无记录</td></tr></tbody>
+      </table>
+    </div>
+    <div id="analyticsNote" class="hint radar-note"></div>
+  </section>
+
+  <section class="panel replay-panel">
+    <div class="panel-head replay-head">
+      <div>
+        <h2>策略回放实验室</h2>
+        <span class="hint">用已经观测到的补货窗口比较轮询间隔与 DC 策略；只做历史模拟，不参与真实下单。</span>
+      </div>
+      <div class="replay-actions">
+        <button id="runReplay" class="primary">运行回放</button>
+        <button id="exportReplay" class="secondary">导出回放 CSV</button>
+      </div>
+    </div>
+    <div class="grid replay-grid">
+      <label>回放目标
+        <select id="replayTarget"><option value="">请选择目标</option></select>
+      </label>
+      <label>历史范围
+        <select id="replayLookback"><option value="7">最近 7 天</option><option value="30" selected>最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近 1 年</option><option value="0">全部历史</option></select>
+      </label>
+      <label>测试轮询间隔（秒，逗号分隔）
+        <input id="replayIntervals" type="text" value="5,10,15,30,60,120">
+      </label>
+      <label>保留最佳捕获率
+        <div class="suffix-input"><input id="replayRetain" type="number" min="50" max="100" step="1" value="95"><span>%</span></div>
+      </label>
+      <label>每目标最大 API 调用/天
+        <input id="replayMaxCalls" type="number" min="0" step="1" value="0" placeholder="0 = 不限">
+      </label>
+      <label>DC 策略
+        <select id="replayDcMode"><option value="current">使用当前真实策略</option><option value="any">任意机房</option><option value="fixed">固定机房</option><option value="whitelist">白名单</option><option value="priority">优先集合 + 回退</option><option value="exclude">排除列表</option></select>
+      </label>
+      <label id="replayFixedWrap">固定机房
+        <select id="replayFixedDc"></select>
+      </label>
+      <label id="replaySelectedWrap">机房集合（逗号分隔）
+        <input id="replaySelectedDcs" type="text" value="gra,rbx,sbg">
+      </label>
+      <label id="replayFallbackWrap">首选无库存时
+        <select id="replayFallback"><option value="wait">继续等待</option><option value="any">回退任意机房</option></select>
+      </label>
+    </div>
+    <div id="replaySummary" class="analytics-stats replay-summary"><div class="muted">选择目标后运行历史回放。</div></div>
+    <div id="replayRecommendation" class="strategy-summary replay-recommendation">尚未运行。</div>
+    <div class="small-title radar-table-title">轮询间隔对比</div>
+    <div class="table-scroll replay-table-scroll">
+      <table class="replay-table">
+        <thead><tr><th>间隔</th><th>调用/天/目标</th><th>可比较窗口</th><th>DC 可用</th><th>保守捕获</th><th>名义捕获</th><th>乐观捕获</th><th>边界覆盖</th><th>建议</th></tr></thead>
+        <tbody id="replayRows"><tr><td colspan="9" class="muted">暂无回放结果</td></tr></tbody>
+      </table>
+    </div>
+    <div class="small-title radar-table-title">推荐间隔下的历史窗口相位捕获</div>
+    <div class="table-scroll replay-detail-scroll">
+      <table class="replay-detail-table">
+        <thead><tr><th>开始</th><th>观测时长</th><th>机房</th><th>DC 策略</th><th>保守</th><th>名义</th><th>乐观</th><th>原始轮询边界</th></tr></thead>
+        <tbody id="replayDetailRows"><tr><td colspan="8" class="muted">暂无窗口明细</td></tr></tbody>
+      </table>
+    </div>
+    <div class="portfolio-replay">
+      <div class="panel-head portfolio-head">
+        <div>
+          <div class="small-title portfolio-title">组合采购回放 · 当前自动下单目标</div>
+          <span class="hint">使用当前 priority、desiredQty、DC 策略；对一个轮询周期的全部整数秒相位重放。completedQty 不参与，模拟从 0 开始。</span>
+        </div>
+        <button id="runPortfolioReplay">运行组合回放</button>
+      </div>
+      <div class="grid portfolio-controls">
+        <label>轮询间隔（秒）<input id="portfolioInterval" type="number" min="1" max="3600" value="30"></label>
+        <label>历史范围<select id="portfolioLookback"><option value="7">最近 7 天</option><option value="30" selected>最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近 1 年</option><option value="0">全部历史</option></select></label>
+        <label>模拟总预算<input id="portfolioBudget" type="number" min="0" step="0.01" placeholder="留空=当前剩余；0=无限"></label>
+      </div>
+      <div id="portfolioSummary" class="analytics-stats replay-summary"><div class="muted">尚未运行组合采购回放。</div></div>
+      <div class="table-scroll portfolio-table-scroll">
+        <table class="portfolio-table">
+          <thead><tr><th>目标</th><th>Priority</th><th>Desired</th><th>预算预留/台</th><th>历史窗口</th><th>平均买到</th><th>至少买到1台的相位</th><th>平均预算阻止</th><th>预留未知阻止</th></tr></thead>
+          <tbody id="portfolioRows"><tr><td colspan="9" class="muted">暂无组合回放结果</td></tr></tbody>
+        </table>
+      </div>
+      <div id="portfolioNote" class="hint radar-note"></div>
+    </div>
+    <div class="optimizer-lab">
+      <div class="panel-head optimizer-head">
+        <div>
+          <div class="small-title optimizer-title">自动策略优化器 · Pareto 前沿</div>
+          <span class="hint">搜索 poll interval × DC policy × priority × budget；只做历史回放，不修改真实策略，不调用 checkout。</span>
+        </div>
+        <div class="replay-actions">
+          <button id="runOptimizer" class="primary">运行优化</button>
+          <button id="exportOptimizer" class="secondary">导出 Pareto CSV</button>
+        </div>
+      </div>
+      <div class="grid optimizer-controls">
+        <label>历史范围
+          <select id="optimizerLookback"><option value="7">最近 7 天</option><option value="30" selected>最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近 1 年</option><option value="0">全部历史</option></select>
+        </label>
+        <label>轮询候选（秒）
+          <input id="optimizerIntervals" type="text" value="5,10,15,30,60,120">
+        </label>
+        <label>DC 搜索范围
+          <select id="optimizerDcSearch"><option value="current">仅当前策略</option><option value="balanced" selected>平衡：当前 + any + 固定 DC + 当前集合策略</option><option value="extended">扩展：再加入逐 DC 排除</option></select>
+        </label>
+        <label>Priority 搜索
+          <select id="optimizerPrioritySearch"><option value="current">仅当前</option><option value="heuristic" selected>启发式候选</option><option value="exhaustive">穷举（≤5 个目标）</option></select>
+        </label>
+        <label>预算候选
+          <input id="optimizerBudgets" type="text" placeholder="留空=自动推导；或 100,200,400；0=不限">
+        </label>
+        <label>推荐保留最佳完成度
+          <div class="suffix-input"><input id="optimizerRetain" type="number" min="50" max="100" value="95"><span>%</span></div>
+        </label>
+        <label>最大评估候选数
+          <input id="optimizerMaxCandidates" type="number" min="50" max="20000" value="5000">
+        </label>
+      </div>
+      <div id="optimizerSummary" class="analytics-stats replay-summary"><div class="muted">尚未运行自动策略优化。</div></div>
+      <div id="optimizerRecommendation" class="strategy-summary replay-recommendation">Pareto 推荐点将在这里显示。</div>
+      <div class="small-title radar-table-title">Pareto 前沿（不可被其他测试方案全面支配）</div>
+      <div class="table-scroll optimizer-table-scroll">
+        <table class="optimizer-table">
+          <thead><tr><th>#</th><th>轮询</th><th>DC 策略</th><th>Priority</th><th>预算上限</th><th>加权完成度</th><th>平均买到</th><th>API/天</th><th>平均预算占用</th><th>标记</th></tr></thead>
+          <tbody id="optimizerRows"><tr><td colspan="10" class="muted">暂无优化结果</td></tr></tbody>
+        </table>
+      </div>
+      <div id="optimizerNote" class="hint radar-note">“加权完成度”的权重固定使用你当前每个目标的 priority；优化器可以搜索执行顺序，但不会偷偷改写你真正偏好的目标权重。</div>
+    </div>
+    <div id="replayNote" class="hint radar-note">回放只覆盖历史上已经被 watcher 看见的补货窗口；它不能证明更快轮询能发现过去从未被记录到的窗口。</div>
+  </section>
+
+  <section class="stats" id="stats"></section>
+
+  <section class="table-panel">
+    <div class="table-scroll">
+      <table>
+        <thead>
+        <tr>
+          <th>服务器 / Plan</th>
+          <th>内存</th>
+          <th>硬盘</th>
+          <th>配置月价</th>
+          <th>付款策略</th>
+          <th>配置周期价估算</th>
+          <th>当前库存</th>
+          <th>可下单性</th>
+          <th>策略命中</th>
+          <th>Watch Index</th>
+          <th>监控</th>
+          <th>自动下单</th>
+          <th>优先级</th>
+          <th>目标 / 完成</th>
+          <th>预算占用</th>
+          <th>状态</th>
+          <th>高级</th>
+        </tr>
+        </thead>
+        <tbody id="serverRows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" id="runtimeSettingsPanel">
+    <div class="panel-head"><h2>运行参数</h2><span id="settingsDirtyHint" class="hint"></span></div>
+    <div class="grid settings-grid">
+      <label>kimsufi-notifier.exe
+        <input id="exePath" type="text">
+      </label>
+      <label>Endpoint
+        <select id="endpoint">
+          <option>ovh-eu</option><option>ovh-ca</option><option>ovh-us</option>
+        </select>
+      </label>
+      <label>Country
+        <input id="country" type="text" maxlength="8">
+      </label>
+      <label>轮询间隔（秒）
+        <input id="pollInterval" type="number" min="10" max="3600">
+      </label>
+      <label>目录刷新间隔（秒）
+        <input id="catalogInterval" type="number" min="60" max="86400">
+      </label>
+      <label>默认付款组合
+        <select id="paymentPreset">
+          <option value="custom">正在读取已缓存付款组合…</option>
+        </select>
+      </label>
+      <div class="payment-scan-field">
+        <span class="hint" id="paymentScanStatus">付款组合按当前 Endpoint/Country/目录动态发现</span>
+        <button id="scanPaymentProfiles" type="button" disabled>等待服务器目录…</button>
+      </div>
+      <label>默认 price-duration
+        <input id="priceDuration" type="text" placeholder="P1M">
+      </label>
+      <label>默认 price-mode
+        <input id="priceMode" type="text" placeholder="default">
+      </label>
+      <label class="checkbox-line">
+        <input id="autoPay" type="checkbox"> 自动支付（--auto-pay）
+      </label>
+    </div>
+    <button id="saveSettings" class="primary">保存运行参数</button>
+    <p class="hint">OVH_APP_KEY / OVH_APP_SECRET / OVH_CONSUMER_KEY 只从服务器进程环境变量读取，不写入浏览器或配置文件。“配置月租价格上限”按 P1M/default 的精确配置月价做初筛；如果配置月价未知且启用了上限，自动下单会保守阻止。预算预检和主表周期价都使用同一套 OVH public cart API 原始价格模型。价格均为未税估算，setup fee/其他一次性费用若 CLI 未暴露，不纳入该数值，需由固定/百分比预算缓冲覆盖。</p>
+  </section>
+
+  <dialog id="diagnosticDialog">
+    <form method="dialog" class="dialog-card">
+      <div class="panel-head"><h2 id="diagnosticTitle">价格 / Option 诊断</h2><button value="cancel" class="secondary">关闭</button></div>
+      <pre id="diagnosticText" class="review-text diagnostic-text">读取中…</pre>
+    </form>
+  </dialog>
+
+  <dialog id="advancedDialog">
+    <form method="dialog" class="dialog-card">
+      <div class="panel-head">
+        <h2 id="dialogTitle">目标高级设置</h2>
+        <button value="cancel" class="secondary">关闭</button>
+      </div>
+      <input id="dialogTargetId" type="hidden">
+      <div class="grid">
+        <label>下单 memory option
+          <input id="orderMemoryOption" type="text">
+        </label>
+        <label>下单 storage option
+          <input id="orderStorageOption" type="text">
+        </label>
+        <label class="checkbox-line"><input id="inheritPrice" type="checkbox"> 继承全局付款组合</label>
+        <label>本型号可用付款组合
+          <select id="priceProfile">
+            <option value="">点击“读取付款周期”获取</option>
+          </select>
+        </label>
+        <label class="checkbox-line"><input id="targetAutoPay" type="checkbox"> 自动支付</label>
+        <label>抢购优先级（0–100）
+          <input id="targetPriority" type="number" min="0" max="100" step="1" value="50">
+        </label>
+        <label>每单预算预留覆盖
+          <input id="targetBudgetReserve" type="number" min="0" step="0.01" placeholder="0 = 自动按价格+缓冲计算">
+        </label>
+      </div>
+      <div class="dialog-actions">
+        <button id="resolveOptions" type="button">自动解析下单选项</button>
+        <button id="loadPrices" type="button">读取付款周期</button>
+        <button id="clearReview" type="button" class="danger-soft">清除 REVIEW</button>
+        <button id="saveAdvanced" type="button" class="primary">保存</button>
+      </div>
+      <div id="priceProfileDetail" class="strategy-summary"></div>
+      <pre id="reviewText" class="review-text"></pre>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" aria-live="polite"></div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

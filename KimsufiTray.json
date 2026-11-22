@@ -1,0 +1,11 @@
+{
+  "serverScheme": "http",
+  "serverHost": "127.0.0.1",
+  "serverPort": 8765,
+  "startBackend": true,
+  "backendBindHost": "127.0.0.1",
+  "backendPort": 8765,
+  "allowStopBackend": true,
+  "requestTimeoutSeconds": 3,
+  "notificationPollMs": 3000
+}
